@@ -1,16 +1,16 @@
-from os import environ
-from dotenv import load_dotenv  # Добавляем для локального использования
+import os
+from dotenv import load_dotenv
 
 # Загружаем .env для локального запуска (опционально)
-load_dotenv()  # Убери эту строку, если не хочешь локально
+load_dotenv()
 
 # Получаем токены из переменных окружения
-BOT_TOKEN = environ.get("BOT_TOKEN")
-VK_TOKEN = environ.get("VK_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+VK_TOKEN = os.getenv("VK_TOKEN")
 
-# Проверяем, есть ли токены
+# Проверяем наличие токенов
 if not BOT_TOKEN or not VK_TOKEN:
     raise ValueError("Необходимо указать BOT_TOKEN и VK_TOKEN в переменных окружения (или .env для локального запуска).")
 
-# Добавь это:
+# Максимальное количество ссылок за один массовый запрос
 MAX_LINKS_PER_BATCH = 50
