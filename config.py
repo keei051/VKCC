@@ -11,3 +11,6 @@ VK_TOKEN = environ.get("VK_TOKEN")
 # Проверяем, есть ли токены
 if not BOT_TOKEN or not VK_TOKEN:
     raise ValueError("Необходимо указать BOT_TOKEN и VK_TOKEN в переменных окружения (или .env для локального запуска).")
+
+# Добавь это:
+MAX_LINKS_PER_BATCH = 50
