@@ -1,7 +1,6 @@
 import re
 import logging
 from aiogram.types import Message
-from geopy.geocoders import Nominatim  # Для примерного местоположения (заглушка)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,19 +24,9 @@ def is_valid_url(url: str) -> bool:
     )
     return bool(pattern.match(url))
 
-async def get_user_location(user_id: int) -> str:
-    # Заглушка: реальное местоположение требует API (например, Telegram Passport или IP API)
-    # Здесь примерное значение, можно улучшить с использованием geopy или другого сервиса
-    geolocator = Nominatim(user_agent="vkcc_bot")
-    try:
-        location = geolocator.geocode("Unknown")  # Замени на реальный IP или данные
-        return location.address if location else "Неизвестное местоположение"
-    except Exception:
-        return "Неизвестное местоположение"
-
 def format_link_stats(stats: dict, short_url: str) -> str:
-    if not stats or "views" not in stats:
-        return f"📉 Пока нет статистики по {short_url}.\nПопробуйте позже."
+    if not stats or "views" not in stats or stats.get("views", 0) == 0:
+        return f"📉 Пока нет статистики по {short_url}.\nПопробуйте позже, когда будут переходы."
     
     response = f"📊 Статистика по {short_url}\n"
     response += f"👁 Переходов: {stats.get('views', 0)}\n\n"
@@ -59,16 +48,19 @@ def format_link_stats(stats: dict, short_url: str) -> str:
                 response += f"— {age}: Мужчины {men/total*100:.0f}%, Женщины {women/total*100:.0f}%\n"
 
     if "countries" in stats:
-        response += "\n🌍 География (страны):\n"
+        response += "\n🌍 География (переходы):\n"
+        total_views = stats.get("views", 1)  # Избегаем деления на ноль
         for country in stats["countries"]:
-            country_name = "Неизвестно"  # Требуется парсер для country_id
+            country_id = country["country_id"]
             views = country["views"]
-            response += f"— {country_name}: {views} ({views/stats['views']*100:.1f}%)\n"
+            country_name = "Неизвестная страна"  # Требуется парсер для country_id (например, через справочник)
+            response += f"— {country_name} (ID {country_id}): {views} ({views/total_views*100:.1f}%)\n"
         if "cities" in stats:
             response += "Города:\n"
             for city in stats["cities"]:
-                city_name = "Неизвестно"  # Требуется парсер для city_id
+                city_id = city["city_id"]
                 views = city["views"]
-                response += f"  — {city_name}: {views} ({views/stats['views']*100:.1f}%)\n"
+                city_name = "Неизвестный город"  # Требуется парсер для city_id
+                response += f"  — {city_name} (ID {city_id}): {views} ({views/total_views*100:.1f}%)\n"
 
     return response
