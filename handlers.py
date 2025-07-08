@@ -7,6 +7,7 @@ from keyboards import get_main_keyboard, get_link_actions_keyboard, get_back_key
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from vkcc import shorten_link, get_link_stats
 from utils import safe_delete, is_valid_url, format_link_stats
+from config import MAX_LINKS_PER_BATCH
 import re
 
 # Роутер для обработчиков
@@ -43,21 +44,20 @@ async def shorten_link_start(message: Message, state: FSMContext):
 @router.message(LinkStates.waiting_for_url)
 async def process_url(message: Message, state: FSMContext):
     await safe_delete(message)
-    urls = message.text.strip().split("\n")
-    if len(urls) > 50:
-        await message.answer("🚫 Можно добавить максимум 50 ссылок за раз. Отправьте по частям.", reply_markup=get_main_keyboard())
+    urls = [line.strip() for line in message.text.split("\n") if line.strip()]
+    if len(urls) > MAX_LINKS_PER_BATCH:
+        await message.answer(f"🚫 Можно добавить максимум {MAX_LINKS_PER_BATCH} ссылок за раз. Отправьте по частям.", reply_markup=get_main_keyboard())
         await state.clear()
         return
 
     successful_links = []
     failed_links = []
     for url in urls:
-        url = url.strip()
-        if not url:
-            continue
         title = None
         if "|" in url:
-            url, title = [part.strip() for part in url.split("|", 1)]
+            url_part, title_part = [part.strip() for part in url.split("|", 1)]
+            url = url_part
+            title = title_part if title_part else None
         if not is_valid_url(url):
             failed_links.append(f"Строка: '{url}' — это не ссылка.")
             continue
@@ -71,18 +71,16 @@ async def process_url(message: Message, state: FSMContext):
             else:
                 failed_links.append(f"Ссылка '{url}' уже добавлена.")
         except Exception as e:
-            failed_links.append(f"Ошибка при сокращении '{url}': {str(e)}")
+            failed_links.append(f"⚠️ Ошибка при сокращении '{url}': {str(e)}")
 
-    # Формируем ответ
-    response = "✅ Добавлено ссылок: " + str(len(successful_links)) + ".\n\n"
+    response = f"✅ Добавлено ссылок: {len(successful_links)}.\n\n"
     if successful_links:
-        response += "📋 Список:\n"
+        response += "📋 Список ссылок (скопируйте):\n"
         for i, link in enumerate(successful_links, 1):
             response += f"{i}. {link['title']}:\n{link['short_url']}\n"
     if failed_links:
-        response += "\n⚠️ Ошибки:\n" + "\n".join(failed_links)
+        response += "\n⚠️ Проблемы:\n" + "\n".join(failed_links)
     await message.answer(response, reply_markup=get_main_keyboard())
-
     await state.clear()
 
 # Кнопка "📋 Мои ссылки"
@@ -95,10 +93,10 @@ async def show_links(message: Message):
         return
     keyboard = []
     for link in links:
-        link_id, title, short_url, created_at = link
-        keyboard.append([get_link_actions_keyboard(link_id, title, short_url)])
-    keyboard.append([get_back_keyboard()])
-    await message.answer("📋 Ваши ссылки:", reply_markup=keyboard)
+        link_id, title, short_url, _ = link
+        keyboard.append(get_link_actions_keyboard(link_id, title or "Без подписи", short_url))
+    keyboard.append(get_back_keyboard())
+    await message.answer("📋 Ваши ссылки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
 # Обработка inline-кнопок
 @router.callback_query()
@@ -112,7 +110,7 @@ async def process_callback(callback: CallbackQuery):
         await callback.answer("🚫 Это не ваша ссылка.")
         return
 
-    link_id, _, long_url, short_url, title, vk_key, created_at = link
+    link_id, _, long_url, short_url, title, vk_key, _ = link
 
     if action == "stats":
         try:
@@ -120,7 +118,7 @@ async def process_callback(callback: CallbackQuery):
             formatted_stats = format_link_stats(stats, short_url)
             await callback.message.answer(formatted_stats, reply_markup=get_back_keyboard())
         except Exception:
-            await callback.message.answer("📉 Пока нет статистики по этой ссылке.\nОна появится, как только начнутся переходы.", reply_markup=get_back_keyboard())
+            await callback.message.answer("📉 Пока нет статистики по этой ссылке.\nПопробуйте позже.", reply_markup=get_back_keyboard())
 
     elif action == "rename":
         await callback.message.answer("✏ Введите новое название для ссылки.", reply_markup=ReplyKeyboardRemove())
@@ -129,7 +127,7 @@ async def process_callback(callback: CallbackQuery):
         await callback.message.bot.set_data(callback.from_user.id, {"link_id": link_id})
 
     elif action == "delete":
-        await callback.message.answer(f"❗ Удалить ссылку {short_url}?\n[✅ Да] [❌ Нет]", reply_markup=get_link_actions_keyboard(link_id, title, short_url, delete_confirm=True))
+        await callback.message.answer(f"❗ Удалить ссылку {short_url}?\n[✅ Да] [❌ Нет]", reply_markup=get_link_actions_keyboard(link_id, title or "Без подписи", short_url, delete_confirm=True))
         await callback.answer()
 
     elif action == "delete_yes":
@@ -140,7 +138,7 @@ async def process_callback(callback: CallbackQuery):
         await callback.answer()
 
     elif action == "delete_no":
-        await callback.message.answer("❌ Удаление отменено.", reply_markup=get_link_actions_keyboard(link_id, title, short_url))
+        await callback.message.answer("❌ Удаление отменено.", reply_markup=get_link_actions_keyboard(link_id, title or "Без подписи", short_url))
         await callback.answer()
 
     elif action == "back":
