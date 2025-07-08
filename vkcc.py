@@ -1,10 +1,9 @@
 import aiohttp
-from config import VK_TOKEN
 
-async def shorten_link(long_url: str) -> str:
+async def shorten_link(long_url: str, vk_token: str) -> str:
     params = {
         "url": long_url,
-        "access_token": VK_TOKEN,
+        "access_token": vk_token,
         "v": "5.199"
     }
     async with aiohttp.ClientSession() as session:
@@ -14,10 +13,10 @@ async def shorten_link(long_url: str) -> str:
                 return data["response"]["short_url"]
             raise ValueError(data.get("error", {}).get("error_msg", "Не удалось сократить ссылку"))
 
-async def get_link_stats(vk_key: str) -> dict:
+async def get_link_stats(vk_key: str, vk_token: str) -> dict:
     params = {
         "key": vk_key,
-        "access_token": VK_TOKEN,
+        "access_token": vk_token,
         "v": "5.199",
         "extended": 1,
         "interval": "forever"
