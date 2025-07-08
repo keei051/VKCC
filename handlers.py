@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart
 from keyboards import get_main_keyboard, get_link_actions_keyboard, get_back_keyboard
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from vkcc import shorten_link, get_link_stats
-from utils import safe_delete, is_valid_url, format_link_stats, get_user_location
+from utils import safe_delete, is_valid_url, format_link_stats
 from config import MAX_LINKS_PER_BATCH
 import asyncio
 
@@ -18,8 +18,8 @@ router = Router()
 class LinkStates(StatesGroup):
     waiting_for_url = State()
     waiting_for_title = State()
+    waiting_for_mass_title = State()
     waiting_for_new_title = State()
-    waiting_for_mass_title = State()  # Для массовой загрузки
 
 # Приветственное сообщение
 @router.message(CommandStart())
@@ -29,7 +29,7 @@ async def start_command(message: Message, state: FSMContext):
         "👋 Привет! Я твой бот для работы со ссылками!\n\n"
         "🔗 Что я умею:\n"
         "- Сократить одну или до 50 ссылок с подписями.\n"
-        "- Показать статистику (клики, гео, пол/возраст).\n"
+        "- Показать статистику (клики, гео переходов, пол/возраст).\n"
         "- Управлять ссылками: переименовать или удалить.\n\n"
         "Выбери действие 👇",
         reply_markup=get_main_keyboard()
@@ -47,7 +47,7 @@ async def cancel_command(message: Message, state: FSMContext):
 @router.message(F.text == "🔗 Сократить ссылку")
 async def shorten_link_start(message: Message, state: FSMContext):
     await safe_delete(message)
-    await message.answer("📩 Отправьте ссылку для сокращения (или несколько через | без подписи).", reply_markup=ReplyKeyboardRemove())
+    await message.answer("📩 Отправьте ссылку для сокращения (или несколько через новые строки).", reply_markup=ReplyKeyboardRemove())
     await state.set_state(LinkStates.waiting_for_url)
 
 # Обработка введённой ссылки
@@ -172,16 +172,15 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
 async def show_links(message: Message):
     await safe_delete(message)
     links = await get_links_by_user(message.from_user.id)
-    location = await get_user_location(message.from_user.id)
     if not links:
-        await message.answer(f"📭 У вас пока нет ссылок. Вы находитесь в {location}.", reply_markup=get_main_keyboard())
+        await message.answer("📭 У вас пока нет ссылок.", reply_markup=get_main_keyboard())
         return
     keyboard = []
     for link in links:
         link_id, title, short_url, _ = link
         keyboard.append(get_link_actions_keyboard(link_id, title or "Без подписи", short_url))
     keyboard.append(get_back_keyboard())
-    sent_message = await message.answer(f"📋 Ваши ссылки (вы находитесь в {location}):", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    sent_message = await message.answer("📋 Ваши ссылки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
     await asyncio.sleep(10)  # Даём время увидеть список
     await safe_delete(sent_message)
 
