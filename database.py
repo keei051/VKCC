@@ -3,7 +3,6 @@ from datetime import datetime
 
 async def init_db():
     async with aiosqlite.connect("links.db") as db:
-        # Создаём таблицу без индекса
         await db.execute("""
             CREATE TABLE IF NOT EXISTS links (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,7 +14,6 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
-        # Создаём индекс отдельно
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)
         """)
