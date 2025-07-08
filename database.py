@@ -27,7 +27,7 @@ async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_
                 (user_id, short_url)
             )
             if await cursor.fetchone():
-                return False  # Ссылка уже существует
+                return False
             await db.execute(
                 "INSERT INTO links (user_id, long_url, short_url, title, vk_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, long_url, short_url, title or "Без подписи", vk_key, datetime.now().isoformat())
