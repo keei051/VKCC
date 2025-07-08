@@ -73,7 +73,8 @@ async def process_url(message: Message, state: FSMContext):
         await process_mass_urls(message, state)
 
 async def process_mass_urls(message: Message, state: FSMContext):
-    urls = await state.get_data()["urls"]
+    data = await state.get_data()  # Ожидаем данные
+    urls = data.get("urls", [])
     if not urls:
         await message.answer("🚫 Список ссылок пуст. Попробуйте снова.", reply_markup=get_main_keyboard())
         await state.clear()
@@ -103,7 +104,8 @@ async def process_mass_urls(message: Message, state: FSMContext):
 @router.message(LinkStates.waiting_for_title)
 async def process_single_title(message: Message, state: FSMContext):
     await safe_delete(message)
-    urls = await state.get_data()["urls"]
+    data = await state.get_data()  # Ожидаем данные
+    urls = data.get("urls", [])
     title = message.text.strip() if message.text != "/skip" else None
     url = urls[0] if "|" not in urls[0] else urls[0].split("|")[0].strip()
     if not is_valid_url(url):
@@ -127,22 +129,23 @@ async def process_single_title(message: Message, state: FSMContext):
 @router.message(LinkStates.waiting_for_mass_title)
 async def process_mass_title(message: Message, state: FSMContext):
     await safe_delete(message)
-    urls = await state.get_data()["urls"]
-    current_url = await state.get_data()["current_url"]
+    data = await state.get_data()  # Ожидаем данные
+    urls = data.get("urls", [])
+    current_url = data.get("current_url")
     title = message.text.strip() if message.text != "/skip" else None
     try:
         short_url = await shorten_link(current_url)
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, current_url, short_url, title, vk_key):
-            successful_links = await state.get_data().get("successful_links", [])
+            successful_links = data.get("successful_links", [])
             successful_links.append({"title": title or "Без подписи", "short_url": short_url})
             await state.update_data(successful_links=successful_links)
         else:
-            failed_links = await state.get_data().get("failed_links", [])
+            failed_links = data.get("failed_links", [])
             failed_links.append(f"Ссылка '{current_url}' уже добавлена.")
             await state.update_data(failed_links=failed_links)
     except Exception as e:
-        failed_links = await state.get_data().get("failed_links", [])
+        failed_links = data.get("failed_links", [])
         failed_links.append(f"⚠️ Ошибка при сокращении '{current_url}': {str(e)}")
         await state.update_data(failed_links=failed_links)
 
@@ -153,8 +156,9 @@ async def process_mass_title(message: Message, state: FSMContext):
 
 async def finalize_mass_processing(message: Message, state: FSMContext):
     await safe_delete(message)
-    successful_links = await state.get_data().get("successful_links", [])
-    failed_links = await state.get_data().get("failed_links", [])
+    data = await state.get_data()  # Ожидаем данные
+    successful_links = data.get("successful_links", [])
+    failed_links = data.get("failed_links", [])
     response = f"✅ Добавлено ссылок: {len(successful_links)}.\n\n"
     if successful_links:
         response += "📋 Список ссылок (скопируйте):\n"
@@ -240,8 +244,8 @@ async def process_callback(callback: CallbackQuery):
 @router.message(LinkStates.waiting_for_new_title)
 async def process_new_title(message: Message, state: FSMContext):
     await safe_delete(message)
-    user_data = await state.get_data()
-    link_id = user_data.get("link_id")
+    data = await state.get_data()  # Ожидаем данные
+    link_id = data.get("link_id")
     if await rename_link(link_id, message.from_user.id, message.text.strip()):
         await message.answer("✏️ Название обновлено!", reply_markup=get_main_keyboard())
     else:
