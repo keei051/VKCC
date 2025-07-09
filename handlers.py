@@ -1,22 +1,19 @@
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
+from aiogram import Router, F, types
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardRemove
-from aiogram.filters import CommandStart
-from keyboards import get_main_keyboard, get_link_list_keyboard, get_link_card_keyboard, get_pagination_keyboard, get_back_keyboard
+from aiogram.types import Message, CallbackQuery
+from aiogram.utils.markdown import hlink
+from keyboards import get_main_keyboard, get_link_list_keyboard, get_link_card_keyboard, get_link_actions_keyboard, get_back_keyboard, get_pagination_keyboard
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
+from utils import is_valid_url, safe_delete, format_link_stats
 from vkcc import shorten_link, get_link_stats
-from utils import safe_delete, is_valid_url, format_link_stats
-from config import MAX_LINKS_PER_BATCH, VK_TOKEN
+from config import VK_TOKEN, MAX_LINKS_PER_BATCH
 import logging
-import asyncio
-import traceback
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import math
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 class LinkStates(StatesGroup):
     waiting_for_url = State()
@@ -26,35 +23,21 @@ class LinkStates(StatesGroup):
     waiting_for_page = State()
 
 @router.message(CommandStart())
-async def start_command(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Запуск команды /start для user_id={message.from_user.id}")
     user_name = message.from_user.first_name or "пользователь"
     await message.answer(
-        f"Привет, {user_name}. Это профессиональный бот для работы со ссылками."
-    )
-    await asyncio.sleep(0.5)
-    await message.answer(
-        "Доступные функции:\n"
-        "- Сокращение до 50 ссылок с описанием.\n"
-        "- Просмотр и управление списком ссылок.\n"
-        "Выберите действие ниже.",
+        f"Привет, {user_name}. Это профессиональный бот для работы со ссылками.",
         reply_markup=get_main_keyboard()
     )
     await state.clear()
 
-@router.message(F.text == "/cancel")
-async def cancel_command(message: Message, state: FSMContext):
-    await safe_delete(message)
-    logger.info(f"Отмена действия для user_id={message.from_user.id}")
-    await message.answer("Действие отменено.", reply_markup=get_main_keyboard())
-    await state.clear()
-
 @router.message(F.text == "Сократить ссылку")
-async def shorten_link_start(message: Message, state: FSMContext):
+async def start_shorten(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Пользователь {message.from_user.id} начал сокращение ссылки")
-    await message.answer("Введите ссылку для сокращения (или несколько через новые строки, до 50). Для описания используйте формат: https://site.com | Описание.", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Отправь мне ссылку для сокращения (или несколько через новые строки, до 50). Для описания используйте формат: https://site.com | Описание.", reply_markup=ReplyKeyboardRemove())
     await state.set_state(LinkStates.waiting_for_url)
 
 @router.message(LinkStates.waiting_for_url)
@@ -134,14 +117,14 @@ async def process_single_title(message: Message, state: FSMContext):
         logger.info(f"Ссылка успешно сокращена: {short_url}")
         vk_key = short_url.split("/")[-1]
         logger.info(f"Попытка сохранить ссылку: user_id={message.from_user.id}, short_url={short_url}, title={title}")
-        if await save_link(message.from_user.id, url, short_url, title, vk_key):
-            await message.answer(f"Ссылка успешно добавлена.\n{title or 'Без описания'}:\n{short_url}", reply_markup=get_main_keyboard())
+        if await save_link(message.from_user.id, url, short_url, title or "Поиск", vk_key):
+            await message.answer(f"Ссылка успешно сокращена: {short_url}", reply_markup=get_main_keyboard())
         else:
             await message.answer(f"Ссылка '{url}' уже существует.", reply_markup=get_main_keyboard())
     except Exception as e:
         logger.error("‼️ Ошибка при сокращении или сохранении ссылки:")
         logger.error(traceback.format_exc())
-        await message.answer(f"Ошибка при сокращении: {str(e)}", reply_markup=get_main_keyboard())
+        await message.answer(f"Ошибка: {str(e)}", reply_markup=get_main_keyboard())
     await state.clear()
 
 @router.message(LinkStates.waiting_for_mass_title)
@@ -157,7 +140,7 @@ async def process_mass_title(message: Message, state: FSMContext):
         logger.info(f"Ссылка успешно сокращена: {short_url}")
         vk_key = short_url.split("/")[-1]
         logger.info(f"Попытка сохранить ссылку: user_id={message.from_user.id}, short_url={short_url}, title={title}")
-        if await save_link(message.from_user.id, current_url, short_url, title, vk_key):
+        if await save_link(message.from_user.id, current_url, short_url, title or "Поиск", vk_key):
             successful_links = data.get("successful_links", [])
             successful_links.append({"title": title or "Без описания", "short_url": short_url})
             await state.update_data(successful_links=successful_links)
@@ -186,132 +169,131 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
     if successful_links:
         response += "Список ссылок:\n"
         for i, link in enumerate(successful_links, 1):
-            response += f"{i}. {link['title']}:\n{link['short_url']}\n"
+            response += f"{i}. {link['title']}:\n{hlink(link['short_url'], link['short_url'])}\n"
     if failed_links:
         response += "\nПроблемы:\n" + "\n".join(failed_links)
     await message.answer(response, reply_markup=get_main_keyboard())
     await state.clear()
 
 @router.message(F.text == "Мои ссылки")
-async def show_links(message: Message, state: FSMContext):
+async def show_user_links(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Запрос списка ссылок для user_id={message.from_user.id}")
     links = await get_links_by_user(message.from_user.id)
     if not links:
         await message.answer("У вас пока нет сохранённых ссылок.", reply_markup=get_main_keyboard())
         return
-    await state.update_data(links=links, current_page=1)
-    await show_page(message, state)
+    await state.update_data(links=links, page=1)
+    await send_links_page(message, links, 1)
 
-async def show_page(message: Message, state: FSMContext):
-    data = await state.get_data()
-    links = data.get("links", [])
-    current_page = data.get("current_page", 1)
-    page_size = 5
-    total_pages = (len(links) + page_size - 1) // page_size
-    start_idx = (current_page - 1) * page_size
-    end_idx = min(start_idx + page_size, len(links))
-    current_links = links[start_idx:end_idx]
+async def send_links_page(message_or_cb, links, page):
+    per_page = 5
+    total_pages = math.ceil(len(links) / per_page)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    end = start + per_page
+    current_links = links[start:end]
 
-    keyboard = []
+    text = "<b>Ваши ссылки:</b>\n"
     for link in current_links:
-        link_id, title, short_url, _ = link
-        keyboard += get_link_list_keyboard(link_id, title or "Без описания", short_url)  # Используем +=
-    if total_pages > 1:
-        keyboard += get_pagination_keyboard(current_page, total_pages)
-    keyboard += get_back_keyboard()
+        text += f"• <b>{link[1]}</b> — {hlink(link[2], link[2])}\n"
+        text += f"<i>Создана:</i> {link[3][:10]}\n"
+        text += f"/view_{link[0]}\n\n"
 
-    response = f"Ваши ссылки (страница {current_page} из {total_pages}):\n"
-    for i, link in enumerate(current_links, start_idx + 1):
-        link_id, title, short_url, _ = link
-        response += f"{i}. {title or 'Без описания'} - {short_url}\n"
+    keyboard = get_pagination_keyboard(page, total_pages)
+    if isinstance(message_or_cb, Message):
+        await message_or_cb.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    elif isinstance(message_or_cb, CallbackQuery):
+        await message_or_cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+        await message_or_cb.answer()
 
-    await message.answer(
-        response,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
-    )
+@router.message(F.text.regexp(r"/view_\d+"))
+async def view_link_from_text(message: Message):
+    link_id = int(message.text.split("_")[-1])
+    user_id = message.from_user.id
+    link = await get_link_by_id(link_id, user_id)
+    if not link:
+        await message.answer("Ссылка не найдена")
+        return
+    _, _, long_url, short_url, title, _, created_at = link
+    text = f"<b>{title}</b>\n\n{hlink('Открыть ссылку', short_url)}\n\n"
+    text += f"<i>Создана:</i> {created_at[:10]}\n<i>Исходная ссылка:</i> {long_url}"
+    await message.answer(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at))
 
 @router.callback_query(F.data.startswith("page_"))
-async def handle_pagination(callback: CallbackQuery, state: FSMContext):
-    await safe_delete(callback.message)
+async def paginate_links(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.split("_")[-1])
     data = await state.get_data()
-    current_page = int(callback.data.split("_")[1])
-    await state.update_data(current_page=current_page)
-    await show_page(callback.message, state)
-    await callback.answer()
+    links = data.get("links", [])
+    await state.update_data(page=page)
+    await send_links_page(callback, links, page)
 
-@router.callback_query()
-async def process_callback(callback: CallbackQuery):
-    await safe_delete(callback.message)
+@router.callback_query(F.data.startswith("stats_"))
+async def show_stats(callback: CallbackQuery):
+    link_id = int(callback.data.split("_")[-1])
     user_id = callback.from_user.id
-    action, link_id = callback.data.split("_")
-    link = await get_link_by_id(int(link_id), user_id)
-
-    if not link or link[1] != user_id:
-        await callback.answer("Это не ваша ссылка.")
+    link = await get_link_by_id(link_id, user_id)
+    if not link:
+        await callback.answer("Ссылка не найдена", show_alert=True)
         return
+    _, _, _, short_url, _, vk_key, _ = link
+    try:
+        stats = await get_link_stats(vk_key, VK_TOKEN)
+        text = format_link_stats(stats, short_url)
+        await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+    except Exception as e:
+        await callback.message.answer(f"Ошибка при получении статистики: {str(e)}")
 
-    link_id, _, long_url, short_url, title, vk_key, created_at = link
+@router.callback_query(F.data == "back")
+async def go_back(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    links = data.get("links", [])
+    page = data.get("page", 1)
+    await send_links_page(callback, links, page)
 
-    if action == "view":
-        response = f"Подробности ссылки:\n"
-        response += f"Описание: {title or 'Без описания'}\n"
-        response += f"Оригинальная: {long_url}\n"
-        response += f"Сокращённая: {short_url}\n"
-        response += f"Добавлена: {created_at}"
-        keyboard = get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at)
-        await callback.message.answer(response, reply_markup=keyboard)
-        await callback.answer()
-
-    elif action == "stats":
-        try:
-            logger.info(f"Запрос статистики для ссылки {short_url}, user_id={user_id}")
-            stats = await get_link_stats(vk_key, VK_TOKEN)
-            formatted_stats = format_link_stats(stats, short_url)
-            sent_message = await callback.message.answer(formatted_stats, reply_markup=get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at))
-            await asyncio.sleep(10)
-            await safe_delete(sent_message)
-        except Exception as e:
-            logger.error(f"Ошибка получения статистики для {short_url}: {e}")
-            await callback.message.answer(f"Ошибка получения статистики: {str(e)}. Повторите позже.", reply_markup=get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at))
-
-    elif action == "rename":
-        await callback.message.answer("Введите новое описание для ссылки.", reply_markup=ReplyKeyboardRemove())
-        await callback.answer()
-        await callback.message.bot.set_state(callback.from_user.id, LinkStates.waiting_for_new_title, callback.message.chat.id)
-        await callback.message.bot.set_data(callback.from_user.id, {"link_id": link_id})
-
-    elif action == "delete":
-        sent_message = await callback.message.answer(f"Удалить ссылку {short_url}? [Да] [Нет]", reply_markup=get_link_actions_keyboard(link_id, title or "Без описания", short_url, delete_confirm=True))
-        await callback.answer()
-        await asyncio.sleep(5)
-        await safe_delete(sent_message)
-
-    elif action == "delete_yes":
+@router.callback_query(F.data.startswith("delete_"))
+async def confirm_delete(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    if parts[1] == "yes":
+        link_id = int(parts[-1])
+        user_id = callback.from_user.id
         if await delete_link(link_id, user_id):
-            await callback.message.answer("Ссылка удалена.", reply_markup=get_main_keyboard())
+            await callback.message.delete()
+            await callback.answer("Ссылка удалена")
         else:
-            await callback.message.answer("Ошибка при удалении.", reply_markup=get_main_keyboard())
-        await callback.answer()
+            await callback.answer("Ошибка удаления", show_alert=True)
+    elif parts[1] == "no":
+        await callback.message.edit_reply_markup(reply_markup=get_back_keyboard())
+    else:
+        link_id = int(parts[-1])
+        user_id = callback.from_user.id
+        link = await get_link_by_id(link_id, user_id)
+        if not link:
+            await callback.answer("Ссылка не найдена", show_alert=True)
+            return
+        _, _, _, short_url, title, _, _ = link
+        await callback.message.edit_reply_markup(reply_markup=get_link_actions_keyboard(link_id, title, short_url, delete_confirm=True))
 
-    elif action == "delete_no":
-        await callback.message.answer("Удаление отменено.", reply_markup=get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at))
-        await callback.answer()
-
-    elif action == "back":
-        await show_links(callback.message)
-
-    await callback.answer()
+@router.callback_query(F.data.startswith("rename_"))
+async def ask_new_title(callback: CallbackQuery, state: FSMContext):
+    link_id = int(callback.data.split("_")[-1])
+    await state.set_state(LinkStates.waiting_for_new_title)
+    await state.update_data(rename_link_id=link_id)
+    await callback.message.answer("Введите новое название ссылки")
 
 @router.message(LinkStates.waiting_for_new_title)
-async def process_new_title(message: Message, state: FSMContext):
-    await safe_delete(message)
+async def set_new_title(message: Message, state: FSMContext):
+    new_title = message.text.strip()
     data = await state.get_data()
-    link_id = data.get("link_id")
-    if await rename_link(link_id, message.from_user.id, message.text.strip()):
-        await message.answer("Описание обновлено.", reply_markup=get_main_keyboard())
+    link_id = data.get("rename_link_id")
+    user_id = message.from_user.id
+    if not new_title:
+        await message.answer("Название не может быть пустым")
+        return
+    if await rename_link(link_id, user_id, new_title):
+        await message.answer("Название обновлено", reply_markup=get_main_keyboard())
     else:
-        await message.answer("Ошибка при обновлении описания.", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка обновления названия")
     await state.clear()
 
 def setup_handlers(dp):
