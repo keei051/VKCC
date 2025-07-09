@@ -1,32 +1,39 @@
 import aiosqlite
 from datetime import datetime
 import logging
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DB_PATH = os.path.join("/app", "links.db")  # Абсолютный путь на Railway
+
 async def init_db():
-    async with aiosqlite.connect("links.db") as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS links (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                long_url TEXT NOT NULL,
-                short_url TEXT NOT NULL,
-                title TEXT,
-                vk_key TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        await db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)
-        """)
-        logger.info("База данных links.db инициализирована")
-        await db.commit()
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    long_url TEXT NOT NULL,
+                    short_url TEXT NOT NULL,
+                    title TEXT,
+                    vk_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)
+            """)
+            logger.info(f"База данных {DB_PATH} инициализирована или проверена. Файл существует: {os.path.exists(DB_PATH)}")
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Ошибка инициализации базы данных {DB_PATH}: {e}")
 
 async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_key: str):
     try:
-        async with aiosqlite.connect("links.db") as db:
+        async with aiosqlite.connect(DB_PATH) as db:
+            logger.info(f"Попытка сохранить ссылку: user_id={user_id}, short_url={short_url}, title={title}")
             cursor = await db.execute(
                 "SELECT id FROM links WHERE user_id = ? AND short_url = ?",
                 (user_id, short_url)
@@ -36,7 +43,7 @@ async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_
                 return False
             await db.execute(
                 "INSERT INTO links (user_id, long_url, short_url, title, vk_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, long_url, short_url, title or "Без подписи", vk_key, datetime.now().isoformat())
+                (user_id, long_url, short_url, title or "Без описания", vk_key, datetime.now().isoformat())
             )
             await db.commit()
             logger.info(f"Успешно сохранена ссылка {short_url} для user_id {user_id}")
@@ -47,13 +54,14 @@ async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_
 
 async def get_links_by_user(user_id: int):
     try:
-        async with aiosqlite.connect("links.db") as db:
+        async with aiosqlite.connect(DB_PATH) as db:
+            logger.info(f"Запрос ссылок для user_id={user_id}")
             cursor = await db.execute(
                 "SELECT id, title, short_url, created_at FROM links WHERE user_id = ? ORDER BY created_at DESC",
                 (user_id,)
             )
             links = await cursor.fetchall()
-            logger.info(f"Получено {len(links)} ссылок для user_id {user_id}")
+            logger.info(f"Найдено {len(links)} ссылок для user_id {user_id}")
             return links
     except Exception as e:
         logger.error(f"DB Error при получении ссылок для user_id {user_id}: {e}")
@@ -61,7 +69,7 @@ async def get_links_by_user(user_id: int):
 
 async def get_link_by_id(link_id: int, user_id: int):
     try:
-        async with aiosqlite.connect("links.db") as db:
+        async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
                 "SELECT id, user_id, long_url, short_url, title, vk_key, created_at FROM links WHERE id = ? AND user_id = ?",
                 (link_id, user_id)
@@ -73,7 +81,7 @@ async def get_link_by_id(link_id: int, user_id: int):
 
 async def delete_link(link_id: int, user_id: int):
     try:
-        async with aiosqlite.connect("links.db") as db:
+        async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
                 "DELETE FROM links WHERE id = ? AND user_id = ?",
                 (link_id, user_id)
@@ -86,7 +94,7 @@ async def delete_link(link_id: int, user_id: int):
 
 async def rename_link(link_id: int, user_id: int, new_title: str):
     try:
-        async with aiosqlite.connect("links.db") as db:
+        async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "UPDATE links SET title = ? WHERE id = ? AND user_id = ?",
                 (new_title, link_id, user_id)
