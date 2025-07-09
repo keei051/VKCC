@@ -6,7 +6,7 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join("/app", "links.db")  # Абсолютный путь на Railway
+DB_PATH = os.path.join("/app", "links.db")
 
 async def init_db():
     try:
