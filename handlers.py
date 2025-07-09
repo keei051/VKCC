@@ -2,15 +2,31 @@ from aiogram import Router, F, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.utils.markdown import hlink
-from keyboards import get_main_keyboard, get_link_list_keyboard, get_link_card_keyboard, get_link_actions_keyboard, get_back_keyboard, get_pagination_keyboard
-from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
+
+from keyboards import (
+    get_main_keyboard,
+    get_link_list_keyboard,
+    get_link_card_keyboard,
+    get_link_actions_keyboard,
+    get_back_keyboard,
+    get_pagination_keyboard,
+)
+from database import (
+    save_link,
+    get_links_by_user,
+    get_link_by_id,
+    delete_link,
+    rename_link,
+)
 from utils import is_valid_url, safe_delete, format_link_stats
 from vkcc import shorten_link, get_link_stats
 from config import VK_TOKEN, MAX_LINKS_PER_BATCH
+
 import logging
 import math
+import traceback
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -298,6 +314,5 @@ async def set_new_title(message: Message, state: FSMContext):
 
 def setup_handlers(dp):
     dp.include_router(router)
-
 def setup_handlers(dp):
     dp.include_router(router)
