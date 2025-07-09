@@ -5,11 +5,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def shorten_link(long_url: str, vk_token: str) -> str:
-    params = {
-        "url": long_url,
-        "access_token": vk_token,
-        "v": "5.199"
-    }
+    params = {"url": long_url, "access_token": vk_token, "v": "5.199"}
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get("https://api.vk.com/method/utils.getShortLink", params=params) as resp:
@@ -27,13 +23,7 @@ async def shorten_link(long_url: str, vk_token: str) -> str:
             raise ValueError(f"Сетевая ошибка: {str(e)}")
 
 async def get_link_stats(vk_key: str, vk_token: str) -> dict:
-    params = {
-        "key": vk_key,
-        "access_token": vk_token,
-        "v": "5.199",
-        "extended": 1,
-        "interval": "forever"
-    }
+    params = {"key": vk_key, "access_token": vk_token, "v": "5.199", "extended": 1, "interval": "forever"}
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get("https://api.vk.com/method/utils.getLinkStats", params=params) as resp:
