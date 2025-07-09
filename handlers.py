@@ -216,18 +216,20 @@ async def show_page(message: Message, state: FSMContext):
     keyboard = []
     for link in current_links:
         link_id, title, short_url, _ = link
-        keyboard.append(get_link_list_keyboard(link_id, title or "Без описания", short_url))
+        keyboard += get_link_list_keyboard(link_id, title or "Без описания", short_url)  # Используем +=
     if total_pages > 1:
-        pagination = get_pagination_keyboard(current_page, total_pages)
-        keyboard.append(pagination)
-    keyboard.append(get_back_keyboard())
+        keyboard += get_pagination_keyboard(current_page, total_pages)
+    keyboard += get_back_keyboard()
+
     response = f"Ваши ссылки (страница {current_page} из {total_pages}):\n"
     for i, link in enumerate(current_links, start_idx + 1):
         link_id, title, short_url, _ = link
         response += f"{i}. {title or 'Без описания'} - {short_url}\n"
-    sent_message = await message.answer(response, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-    await asyncio.sleep(10)
-    await safe_delete(sent_message)
+
+    await message.answer(
+        response,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
 
 @router.callback_query(F.data.startswith("page_"))
 async def handle_pagination(callback: CallbackQuery, state: FSMContext):
@@ -311,6 +313,9 @@ async def process_new_title(message: Message, state: FSMContext):
     else:
         await message.answer("Ошибка при обновлении описания.", reply_markup=get_main_keyboard())
     await state.clear()
+
+def setup_handlers(dp):
+    dp.include_router(router)
 
 def setup_handlers(dp):
     dp.include_router(router)
