@@ -44,3 +44,14 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Назад", callback_data="back")]
         ]
     )
+
+def get_link_actions_keyboard(link_id: int, title: str, short_url: str, delete_confirm: bool = False) -> InlineKeyboardMarkup:
+    if delete_confirm:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="Да", callback_data=f"delete_yes_{link_id}")],
+                [InlineKeyboardButton(text="Нет", callback_data=f"delete_no_{link_id}")],
+                [InlineKeyboardButton(text="Назад", callback_data="back")]
+            ]
+        )
+    return get_link_list_keyboard(link_id, title, short_url)
