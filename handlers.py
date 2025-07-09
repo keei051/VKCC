@@ -9,7 +9,11 @@ from database import save_link, get_links_by_user, get_link_by_id, delete_link, 
 from vkcc import shorten_link, get_link_stats
 from utils import safe_delete, is_valid_url, format_link_stats
 from config import MAX_LINKS_PER_BATCH, VK_TOKEN
+import logging
 import asyncio
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Роутер для обработчиков
 router = Router()
@@ -31,7 +35,7 @@ async def start_command(message_or_callback: Message | CallbackQuery, state: FSM
         "🎉 <b>Привет, {0}!</b> 🎉\n".format(user_name),
         parse_mode="HTML"
     )
-    await asyncio.sleep(1)  # Анимация
+    await asyncio.sleep(1)
     await (message_or_callback.answer if isinstance(message_or_callback, Message) else message_or_callback.message.answer)(
         "🌟 Я твой стильный бот для работы со ссылками! 🌟\n\n"
         "🔗 <u>Что я умею:</u>\n"
@@ -123,6 +127,7 @@ async def process_single_title(message: Message, state: FSMContext):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
+        logger.info(f"Попытка сократить и сохранить ссылку: user_id={message.from_user.id}, url={url}")
         short_url = await shorten_link(url, VK_TOKEN)
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, url, short_url, title, vk_key):
@@ -130,6 +135,7 @@ async def process_single_title(message: Message, state: FSMContext):
         else:
             await message.answer(f"⚠️ Ссылка '{url}' уже добавлена. 😕", reply_markup=get_main_keyboard())
     except Exception as e:
+        logger.error(f"Ошибка при сокращении или сохранении ссылки: {e}")
         await message.answer(f"⚠️ Ошибка при сокращении: {str(e)} 😞", reply_markup=get_main_keyboard())
     await state.clear()
 
@@ -142,6 +148,7 @@ async def process_mass_title(message: Message, state: FSMContext):
     current_url = data.get("current_url")
     title = message.text.strip() if message.text != "/skip" else None
     try:
+        logger.info(f"Попытка сократить и сохранить ссылку: user_id={message.from_user.id}, url={current_url}")
         short_url = await shorten_link(current_url, VK_TOKEN)
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, current_url, short_url, title, vk_key):
@@ -153,6 +160,7 @@ async def process_mass_title(message: Message, state: FSMContext):
             failed_links.append(f"Ссылка '{current_url}' уже добавлена.")
             await state.update_data(failed_links=failed_links)
     except Exception as e:
+        logger.error(f"Ошибка при сокращении или сохранении ссылки: {e}")
         failed_links = data.get("failed_links", [])
         failed_links.append(f"⚠️ Ошибка при сокращении '{current_url}': {str(e)}")
         await state.update_data(failed_links=failed_links)
