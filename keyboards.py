@@ -10,10 +10,12 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите действие"
     )
 
-def get_link_list_keyboard(link_id: int, title: str, short_url: str) -> list:
-    return [
-        [InlineKeyboardButton(text="Просмотр", callback_data=f"link_{link_id}")]
-    ]
+def get_link_list_keyboard(links) -> list:
+    keyboard = []
+    for link in links:
+        link_id, title, _, _ = link
+        keyboard.append([InlineKeyboardButton(text=f"📍 {title}", callback_data=f"link_{link_id}")])
+    return keyboard
 
 def get_link_card_keyboard(link_id: int, title: str, long_url: str, short_url: str, created_at: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
