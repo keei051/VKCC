@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.utils.markdown import hlink
+from aiogram.types import ReplyKeyboardRemove, InlineKeyboardMarkup
 
 from keyboards import (
     get_main_keyboard,
