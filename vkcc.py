@@ -1,14 +1,10 @@
 import aiohttp
 import logging
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def shorten_link(long_url: str, vk_token: str) -> str:
-    """
-    Сокращает длинную ссылку через VK.cc API.
-    """
     params = {
         "url": long_url,
         "access_token": vk_token,
@@ -31,22 +27,18 @@ async def shorten_link(long_url: str, vk_token: str) -> str:
             raise ValueError(f"Сетевая ошибка: {str(e)}")
 
 async def get_link_stats(vk_key: str, vk_token: str) -> dict:
-    """
-    Получает статистику по сокращённой ссылке через VK.cc API.
-    Возвращает данные о переходах, гео, пол/возраст.
-    """
     params = {
         "key": vk_key,
         "access_token": vk_token,
         "v": "5.199",
-        "extended": 1,  # Полная статистика (гео, пол/возраст)
-        "interval": "forever"  # Статистика за всё время
+        "extended": 1,
+        "interval": "forever"
     }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get("https://api.vk.com/method/utils.getLinkStats", params=params) as resp:
                 data = await resp.json()
-                logger.info(f"Ответ VK API для ключа {vk_key}: {data}")  # Отладка
+                logger.info(f"Ответ VK API для ключа {vk_key}: {data}")
                 if "response" in data:
                     response_data = data["response"]
                     if not response_data.get("views", 0) and not response_data.get("stats") and not response_data.get("sex_age"):
