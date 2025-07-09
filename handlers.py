@@ -118,8 +118,9 @@ async def process_single_title(message: Message, state: FSMContext):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
-        logger.info(f"Попытка сократить и сохранить ссылку: user_id={message.from_user.id}, url={url}")
+        logger.info(f"Начинаю обработку ссылки: user_id={message.from_user.id}, url={url}")
         short_url = await shorten_link(url, VK_TOKEN)
+        logger.info(f"Ссылка успешно сокращена: {short_url}")
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, url, short_url, title, vk_key):
             await message.answer(f"Ссылка успешно добавлена.\n{title or 'Без описания'}:\n{short_url}", reply_markup=get_main_keyboard())
@@ -139,8 +140,9 @@ async def process_mass_title(message: Message, state: FSMContext):
     current_url = data.get("current_url")
     title = message.text.strip() if message.text else None
     try:
-        logger.info(f"Попытка сократить и сохранить ссылку: user_id={message.from_user.id}, url={current_url}")
+        logger.info(f"Начинаю обработку ссылки: user_id={message.from_user.id}, url={current_url}")
         short_url = await shorten_link(current_url, VK_TOKEN)
+        logger.info(f"Ссылка успешно сокращена: {short_url}")
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, current_url, short_url, title, vk_key):
             successful_links = data.get("successful_links", [])
