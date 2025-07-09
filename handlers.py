@@ -8,7 +8,7 @@ from keyboards import get_main_keyboard, get_link_actions_keyboard, get_back_key
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from vkcc import shorten_link, get_link_stats
 from utils import safe_delete, is_valid_url, format_link_stats
-from config import MAX_LINKS_PER_BATCH
+from config import MAX_LINKS_PER_BATCH, VK_TOKEN
 import asyncio
 
 # Роутер для обработчиков
@@ -73,7 +73,7 @@ async def process_url(message: Message, state: FSMContext):
         await process_mass_urls(message, state)
 
 async def process_mass_urls(message: Message, state: FSMContext):
-    data = await state.get_data()  # Ожидаем данные
+    data = await state.get_data()
     urls = data.get("urls", [])
     if not urls:
         await message.answer("🚫 Список ссылок пуст. Попробуйте снова.", reply_markup=get_main_keyboard())
@@ -104,7 +104,7 @@ async def process_mass_urls(message: Message, state: FSMContext):
 @router.message(LinkStates.waiting_for_title)
 async def process_single_title(message: Message, state: FSMContext):
     await safe_delete(message)
-    data = await state.get_data()  # Ожидаем данные
+    data = await state.get_data()
     urls = data.get("urls", [])
     title = message.text.strip() if message.text != "/skip" else None
     url = urls[0] if "|" not in urls[0] else urls[0].split("|")[0].strip()
@@ -115,7 +115,7 @@ async def process_single_title(message: Message, state: FSMContext):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
-        short_url = await shorten_link(url)
+        short_url = await shorten_link(url, VK_TOKEN)
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, url, short_url, title, vk_key):
             await message.answer(f"✅ Ссылка добавлена!\n{title or 'Без подписи'}:\n{short_url}", reply_markup=get_main_keyboard())
@@ -129,12 +129,12 @@ async def process_single_title(message: Message, state: FSMContext):
 @router.message(LinkStates.waiting_for_mass_title)
 async def process_mass_title(message: Message, state: FSMContext):
     await safe_delete(message)
-    data = await state.get_data()  # Ожидаем данные
+    data = await state.get_data()
     urls = data.get("urls", [])
     current_url = data.get("current_url")
     title = message.text.strip() if message.text != "/skip" else None
     try:
-        short_url = await shorten_link(current_url)
+        short_url = await shorten_link(current_url, VK_TOKEN)
         vk_key = short_url.split("/")[-1]
         if await save_link(message.from_user.id, current_url, short_url, title, vk_key):
             successful_links = data.get("successful_links", [])
@@ -156,7 +156,7 @@ async def process_mass_title(message: Message, state: FSMContext):
 
 async def finalize_mass_processing(message: Message, state: FSMContext):
     await safe_delete(message)
-    data = await state.get_data()  # Ожидаем данные
+    data = await state.get_data()
     successful_links = data.get("successful_links", [])
     failed_links = data.get("failed_links", [])
     response = f"✅ Добавлено ссылок: {len(successful_links)}.\n\n"
@@ -167,7 +167,7 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
     if failed_links:
         response += "\n⚠️ Проблемы:\n" + "\n".join(failed_links)
     sent_message = await message.answer(response, reply_markup=get_main_keyboard())
-    await asyncio.sleep(10)  # Даём время увидеть список
+    await asyncio.sleep(10)
     await safe_delete(sent_message)
     await state.clear()
 
@@ -185,7 +185,7 @@ async def show_links(message: Message):
         keyboard.append(get_link_actions_keyboard(link_id, title or "Без подписи", short_url))
     keyboard.append(get_back_keyboard())
     sent_message = await message.answer("📋 Ваши ссылки:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-    await asyncio.sleep(10)  # Даём время увидеть список
+    await asyncio.sleep(10)
     await safe_delete(sent_message)
 
 # Обработка inline-кнопок
@@ -204,10 +204,10 @@ async def process_callback(callback: CallbackQuery):
 
     if action == "stats":
         try:
-            stats = await get_link_stats(vk_key)
+            stats = await get_link_stats(vk_key, VK_TOKEN)
             formatted_stats = format_link_stats(stats, short_url)
             sent_message = await callback.message.answer(formatted_stats, reply_markup=get_back_keyboard())
-            await asyncio.sleep(15)  # Даём время увидеть статистику
+            await asyncio.sleep(15)
             await safe_delete(sent_message)
         except Exception as e:
             await callback.message.answer(f"📉 Ошибка получения статистики: {str(e)}\nПопробуйте позже.", reply_markup=get_back_keyboard())
@@ -221,7 +221,7 @@ async def process_callback(callback: CallbackQuery):
     elif action == "delete":
         sent_message = await callback.message.answer(f"❗ Удалить ссылку {short_url}?\n[✅ Да] [❌ Нет]", reply_markup=get_link_actions_keyboard(link_id, title or "Без подписи", short_url, delete_confirm=True))
         await callback.answer()
-        await asyncio.sleep(5)  # Даём время принять решение
+        await asyncio.sleep(5)
         await safe_delete(sent_message)
 
     elif action == "delete_yes":
@@ -244,7 +244,7 @@ async def process_callback(callback: CallbackQuery):
 @router.message(LinkStates.waiting_for_new_title)
 async def process_new_title(message: Message, state: FSMContext):
     await safe_delete(message)
-    data = await state.get_data()  # Ожидаем данные
+    data = await state.get_data()
     link_id = data.get("link_id")
     if await rename_link(link_id, message.from_user.id, message.text.strip()):
         await message.answer("✏️ Название обновлено!", reply_markup=get_main_keyboard())
