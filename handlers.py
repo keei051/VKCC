@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.utils.markdown import hlink
+from aiogram.exceptions import TelegramBadRequest
 
 from keyboards import (
     get_main_keyboard,
@@ -13,6 +14,7 @@ from keyboards import (
     get_delete_confirm_keyboard,
     get_rename_keyboard,
     get_restart_keyboard,
+    get_pagination_keyboard,
 )
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from utils import is_valid_url, safe_delete, format_link_stats
@@ -31,15 +33,31 @@ class LinkStates(StatesGroup):
     waiting_for_mass_title = State()
     waiting_for_new_title = State()
 
+async def process_and_save_link(url: str, title: str, message: Message, state: FSMContext) -> tuple[bool, str]:
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    try:
+        logger.info(f"Начинаю обработку ссылки: user_id={message.from_user.id}, url={url}")
+        short_url = await shorten_link(url, VK_TOKEN)
+        logger.info(f"Ссылка успешно сокращена: {short_url}")
+        vk_key = short_url.split("/")[-1]
+        logger.info(f"Попытка сохранить ссылку: user_id={message.from_user.id}, short_url={short_url}, title={title}")
+        if await save_link(message.from_user.id, url, short_url, title or "Без названия", vk_key):
+            return True, short_url
+        else:
+            return False, f"Ссылка '{url}' уже существует."
+    except Exception as e:
+        logger.error("‼️ Ошибка при сокращении или сохранении ссылки:")
+        logger.error(traceback.format_exc())
+        return False, str(e)
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Запуск команды /start для user_id={message.from_user.id}")
     user_name = message.from_user.first_name or "пользователь"
     await message.answer(
-        f"Привет, {user_name}. Это бот vkcc-link-bot. Я умею:\n"
-        "- Сократить до 50 ссылок с описанием.\n"
-        "- Показать и управлять твоим списком ссылок.",
+        f"Привет, {user_name}! Добро пожаловать в vkcc-link-bot — профессиональный инструмент для работы со ссылками. Выбери действие ниже.",
         reply_markup=get_main_keyboard()
     )
     await state.clear()
@@ -48,7 +66,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def start_shorten(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Пользователь {message.from_user.id} начал сокращение ссылки")
-    msg = await message.answer("Жду твои ссылки... Введи одну или несколько (до 50) через новые строки. Можно добавить описание через `|`, например: https://site.com | Сайт.", reply_markup=ReplyKeyboardRemove())
+    msg = await message.answer("Введите ссылки для сокращения (до 50 через новые строки).", reply_markup=ReplyKeyboardRemove())
     await state.update_data(initial_msg=msg.message_id)
     await state.set_state(LinkStates.waiting_for_url)
 
@@ -60,7 +78,7 @@ async def process_url(message: Message, state: FSMContext):
     initial_msg = await message.bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=initial_msg_id,
-        text="Проверяю твои ссылки..."
+        text="Проверяю ссылки..."
     )
     await state.update_data(initial_msg=initial_msg.message_id)
     urls = [line.strip() for line in message.text.split("\n") if line.strip()]
@@ -68,7 +86,7 @@ async def process_url(message: Message, state: FSMContext):
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg.message_id,
-            text=f"Слишком много! Максимум {MAX_LINKS_PER_BATCH} ссылок. Разделите ввод.",
+            text=f"Превышен лимит! Максимум {MAX_LINKS_PER_BATCH} ссылок. Разделите ввод.",
             reply_markup=get_main_keyboard()
         )
         await state.clear()
@@ -77,7 +95,7 @@ async def process_url(message: Message, state: FSMContext):
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg.message_id,
-            text="Ошибка: не указана ни одна ссылка. Попробуй снова.",
+            text="Ошибка: не введено ни одной ссылки. Попробуйте снова.",
             reply_markup=get_main_keyboard()
         )
         await state.clear()
@@ -93,13 +111,11 @@ async def process_url(message: Message, state: FSMContext):
             await message.bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=initial_msg.message_id,
-                text=f"Ошибка: строка '{url}' не является корректной ссылкой.",
+                text=f"Ошибка: '{url}' не является корректной ссылкой.",
                 reply_markup=get_main_keyboard()
             )
             await state.clear()
             return
-        if not url_part.startswith(("http://", "https://")):
-            url_part = "https://" + url_part
         processed_urls.append((url_part, title))
     
     await state.update_data(urls=processed_urls, initial_msg=initial_msg.message_id)
@@ -107,14 +123,14 @@ async def process_url(message: Message, state: FSMContext):
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg.message_id,
-            text=f"Жду описание для ссылки '{processed_urls[0][0]}' (или оставь пустым)."
+            text=f"Введите описание для '{processed_urls[0][0]}' (или оставьте пустым)."
         )
         await state.set_state(LinkStates.waiting_for_title)
     else:
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg.message_id,
-            text=f"Начинаю сокращать {len(processed_urls)} ссылок..."
+            text=f"Начинаю сокращение {len(processed_urls)} ссылок..."
         )
         await state.set_state(LinkStates.waiting_for_mass_title)
         await process_mass_urls(message, state)
@@ -128,7 +144,7 @@ async def process_mass_urls(message: Message, state: FSMContext):
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg_id,
-            text="Ошибка: список ссылок пуст. Попробуй снова.",
+            text="Ошибка: список ссылок пуст. Попробуйте снова.",
             reply_markup=get_main_keyboard()
         )
         await state.clear()
@@ -147,7 +163,7 @@ async def process_mass_urls(message: Message, state: FSMContext):
     await message.bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=initial_msg_id,
-        text=f"Сокращаю ссылку '{current_url}'..."
+        text=f"Сокращаю '{current_url}'..."
     )
     await state.set_state(LinkStates.waiting_for_mass_title)
 
@@ -159,56 +175,20 @@ async def process_single_title(message: Message, state: FSMContext):
     initial_msg_id = data.get("initial_msg")
     url, _ = urls[0] if urls else (None, None)
     title = message.text.strip() if message.text else None
-    if not is_valid_url(url):
+    if not title:
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg_id,
-            text="Ошибка: указана неверная ссылка. Попробуй снова.",
-            reply_markup=get_main_keyboard()
+            text="Пожалуйста, введите название. Оно не может быть пустым."
         )
-        await state.clear()
         return
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    success, result = await process_and_save_link(url, title, message, state)
     await message.bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=initial_msg_id,
-        text="Сокращаю твою ссылку..."
+        text=f"Готово ✅\n{result}",
+        reply_markup=get_restart_keyboard()
     )
-    try:
-        logger.info(f"Начинаю обработку ссылки: user_id={message.from_user.id}, url={url}")
-        short_url = await shorten_link(url, VK_TOKEN)
-        logger.info(f"Ссылка успешно сокращена: {short_url}")
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text="Сохраняю ссылку..."
-        )
-        vk_key = short_url.split("/")[-1]
-        logger.info(f"Попытка сохранить ссылку: user_id={message.from_user.id}, short_url={short_url}, title={title}")
-        if await save_link(message.from_user.id, url, short_url, title or "Без названия", vk_key):
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=initial_msg_id,
-                text=f"Готово ✅\nДобавлена 1 ссылка:\n1. {title or 'Без названия'} — {short_url}",
-                reply_markup=get_restart_keyboard()
-            )
-        else:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=initial_msg_id,
-                text=f"Ошибка: ссылка '{url}' уже существует.",
-                reply_markup=get_restart_keyboard()
-            )
-    except Exception as e:
-        logger.error("‼️ Ошибка при сокращении или сохранении ссылки:")
-        logger.error(traceback.format_exc())
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text=f"Ошибка: {str(e)}",
-            reply_markup=get_restart_keyboard()
-        )
     await state.clear()
 
 @router.message(LinkStates.waiting_for_mass_title)
@@ -219,35 +199,21 @@ async def process_mass_title(message: Message, state: FSMContext):
     initial_msg_id = data.get("initial_msg")
     current_url, current_title = data.get("current_url"), data.get("current_title")
     title = message.text.strip() if message.text else current_title
-    await message.bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=initial_msg_id,
-        text=f"Сокращаю ссылку '{current_url}'..."
-    )
-    try:
-        logger.info(f"Начинаю обработку ссылки: user_id={message.from_user.id}, url={current_url}")
-        short_url = await shorten_link(current_url, VK_TOKEN)
-        logger.info(f"Ссылка успешно сокращена: {short_url}")
+    if not title and current_title is None:
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=initial_msg_id,
-            text=f"Сохраняю ссылку '{current_url}'..."
+            text="Пожалуйста, введите название. Оно не может быть пустым."
         )
-        vk_key = short_url.split("/")[-1]
-        logger.info(f"Попытка сохранить ссылку: user_id={message.from_user.id}, short_url={short_url}, title={title}")
-        if await save_link(message.from_user.id, current_url, short_url, title or "Без названия", vk_key):
-            successful_links = data.get("successful_links", [])
-            successful_links.append({"title": title or "Без названия", "short_url": short_url})
-            await state.update_data(successful_links=successful_links)
-        else:
-            failed_links = data.get("failed_links", [])
-            failed_links.append(f"Ссылка '{current_url}' уже существует.")
-            await state.update_data(failed_links=failed_links)
-    except Exception as e:
-        logger.error("‼️ Ошибка при сокращении или сохранении ссылки:")
-        logger.error(traceback.format_exc())
+        return
+    success, result = await process_and_save_link(current_url, title, message, state)
+    if success:
+        successful_links = data.get("successful_links", [])
+        successful_links.append({"title": title or "Без названия", "short_url": result})
+        await state.update_data(successful_links=successful_links)
+    else:
         failed_links = data.get("failed_links", [])
-        failed_links.append(f"Ошибка при сокращении '{current_url}': {str(e)}")
+        failed_links.append(f"Ошибка: {result}")
         await state.update_data(failed_links=failed_links)
 
     if urls:
@@ -337,7 +303,8 @@ async def show_link_card(callback: CallbackQuery, state: FSMContext):
         return
     _, _, long_url, short_url, title, _, created_at = link
     text = f"🔗 {hlink(short_url, short_url)}\n📎 {title}\n📅 Создана: {created_at[:10]}\n🔍 Исходник: {long_url}"
-    await callback.message.edit_text(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at))
+    card_msg = await callback.message.edit_text(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at))
+    await state.update_data(card_msg_id=card_msg.message_id)
 
 @router.callback_query(F.data.startswith("stats_"))
 async def show_stats(callback: CallbackQuery):
@@ -378,9 +345,10 @@ async def set_new_title(message: Message, state: FSMContext):
     new_title = message.text.strip()
     data = await state.get_data()
     link_id = data.get("rename_link_id")
+    card_msg_id = data.get("card_msg_id")
     user_id = message.from_user.id
     if not new_title:
-        await message.answer("Ошибка: название не может быть пустым. Попробуй снова.")
+        await message.answer("Пожалуйста, введите название. Оно не может быть пустым.")
         return
     await message.answer("Обновляю название...")
     if await rename_link(link_id, user_id, new_title):
@@ -388,12 +356,16 @@ async def set_new_title(message: Message, state: FSMContext):
         if link:
             _, _, long_url, short_url, _, _, created_at = link
             text = f"🔗 {hlink(short_url, short_url)}\n📎 {new_title}\n📅 Создана: {created_at[:10]}\n🔍 Исходник: {long_url}"
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=message.message_id - 1,
-                text=text,
-                reply_markup=get_restart_keyboard()
-            )
+            try:
+                await message.bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=card_msg_id,
+                    text=text,
+                    reply_markup=get_restart_keyboard()
+                )
+            except TelegramBadRequest as e:
+                logger.error(f"Ошибка редактирования сообщения: {e}")
+                await message.answer(text, reply_markup=get_restart_keyboard())
     else:
         await message.answer("Ошибка: не удалось обновить название.", reply_markup=get_restart_keyboard())
     await state.clear()
