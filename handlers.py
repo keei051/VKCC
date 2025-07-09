@@ -2,7 +2,7 @@ from aiogram import Router, F, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton
 from aiogram.utils.markdown import hlink
 from aiogram.exceptions import TelegramBadRequest
 
@@ -259,6 +259,7 @@ async def show_link_card(callback: CallbackQuery, state: FSMContext):
     )
     keyboard = get_link_card_keyboard(link_id, title, long_url, short_url, created_at)
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await state.update_data(card_msg_id=callback.message.message_id)
 
 @router.callback_query(F.data.startswith("stats_"))
 async def show_stats(callback: CallbackQuery):
@@ -272,7 +273,8 @@ async def show_stats(callback: CallbackQuery):
 
     stats = await get_link_stats(vk_key, VK_TOKEN)
     text = f"Статистика по {short_url}\n" + format_link_stats(stats, short_url)
-    await callback.message.edit_text(text, reply_markup=get_stats_keyboard())
+    keyboard = get_stats_keyboard()
+    await callback.message.edit_text(text, reply_markup=keyboard)
 
 @router.callback_query(F.data == "back_from_stats")
 async def back_from_stats(callback: CallbackQuery, state: FSMContext):
