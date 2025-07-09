@@ -8,13 +8,11 @@ from aiogram.exceptions import TelegramBadRequest
 
 from keyboards import (
     get_main_keyboard,
-    get_link_list_keyboard,
     get_link_card_keyboard,
     get_stats_keyboard,
     get_delete_confirm_keyboard,
     get_rename_keyboard,
     get_restart_keyboard,
-    get_pagination_keyboard,
 )
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from utils import is_valid_url, safe_delete, format_link_stats
@@ -32,6 +30,19 @@ class LinkStates(StatesGroup):
     waiting_for_title = State()
     waiting_for_mass_title = State()
     waiting_for_new_title = State()
+
+# Универсальная защита редактирования сообщений
+async def safe_edit(bot, chat_id, message_id, text, reply_markup=None):
+    try:
+        return await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+    except TelegramBadRequest as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 async def process_and_save_link(url: str, title: str, message: Message, state: FSMContext) -> tuple[bool, str]:
     if not url.startswith(("http://", "https://")):
@@ -57,7 +68,7 @@ async def cmd_start(message: Message, state: FSMContext):
     logger.info(f"Запуск команды /start для user_id={message.from_user.id}")
     user_name = message.from_user.first_name or "пользователь"
     await message.answer(
-        f"Привет, {user_name}! Добро пожаловать в vkcc-link-bot — профессиональный инструмент для работы со ссылками. Выбери действие ниже.",
+        f"Привет, {user_name}! Добро пожаловать в vkcc-link-bot — ваш инструмент для работы со ссылками. Выберите действие ниже.",
         reply_markup=get_main_keyboard()
     )
     await state.clear()
@@ -66,9 +77,21 @@ async def cmd_start(message: Message, state: FSMContext):
 async def start_shorten(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Пользователь {message.from_user.id} начал сокращение ссылки")
-    msg = await message.answer("Введите ссылки для сокращения (до 50 через новые строки).", reply_markup=ReplyKeyboardRemove())
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отмена", callback_data="cancel_shorten")]
+    ])
+    msg = await message.answer("Введите ссылки (до 50, каждая с новой строки).", reply_markup=keyboard)
     await state.update_data(initial_msg=msg.message_id)
     await state.set_state(LinkStates.waiting_for_url)
+
+@router.callback_query(F.data == "cancel_shorten")
+async def cancel_shorten(callback: CallbackQuery, state: FSMContext):
+    await safe_delete(callback.message)
+    await callback.message.answer(
+        "Действие отменено. Вы вернулись в главное меню.",
+        reply_markup=get_main_keyboard()
+    )
+    await state.clear()
 
 @router.message(LinkStates.waiting_for_url)
 async def process_url(message: Message, state: FSMContext):
@@ -76,67 +99,44 @@ async def process_url(message: Message, state: FSMContext):
     data = await state.get_data()
     initial_msg_id = data.get("initial_msg")
     try:
-        initial_msg = await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text="Проверяю ссылки..."
-        )
-        await state.update_data(initial_msg=initial_msg.message_id)
-    except TelegramBadRequest as e:
-        logger.error(f"Ошибка редактирования сообщения: {e}")
-        initial_msg = await message.answer("Проверяю ссылки...")
-        await state.update_data(initial_msg=initial_msg.message_id)
+        await message.bot.get_message(chat_id=message.chat.id, message_id=initial_msg_id)
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Проверяю ссылки...")
+    except (TelegramBadRequest, ValueError):
+        logger.error(f"Сообщение {initial_msg_id} недоступно для редактирования.")
+        msg = await message.answer("Проверяю ссылки...")
+        await state.update_data(initial_msg=msg.message_id)
+        initial_msg_id = msg.message_id
     urls = [line.strip() for line in message.text.split("\n") if line.strip()]
-    if len(urls) > MAX_LINKS_PER_BATCH:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg.message_id,
-            text=f"Превышен лимит! Максимум {MAX_LINKS_PER_BATCH} ссылок. Разделите ввод.",
-            reply_markup=get_main_keyboard()
-        )
+
+    if not urls:
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Ошибка: ни одной ссылки.", get_main_keyboard())
         await state.clear()
         return
-    if not urls:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg.message_id,
-            text="Ошибка: не введено ни одной ссылки. Попробуйте снова.",
-            reply_markup=get_main_keyboard()
-        )
+    if len(urls) > MAX_LINKS_PER_BATCH:
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Лимит: {MAX_LINKS_PER_BATCH} ссылок.", get_main_keyboard())
         await state.clear()
         return
 
-    processed_urls = []
+    processed = []
     for url in urls:
         if "|" in url:
-            url_part, title = [part.strip() for part in url.split("|", 1)]
+            u, t = map(str.strip, url.split("|", 1))
         else:
-            url_part, title = url.strip(), None
-        if not is_valid_url(url_part):
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=initial_msg.message_id,
-                text=f"Ошибка: '{url}' не является корректной ссылкой.",
-                reply_markup=get_main_keyboard()
-            )
+            u, t = url.strip(), None
+        if not is_valid_url(u):
+            await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Ошибка: {u} — невалидная ссылка.", get_main_keyboard())
             await state.clear()
             return
-        processed_urls.append((url_part, title))
-    
-    await state.update_data(urls=processed_urls, initial_msg=initial_msg.message_id)
-    if len(processed_urls) == 1:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg.message_id,
-            text=f"Введите описание для '{processed_urls[0][0]}' (или оставьте пустым)."
-        )
+        processed.append((u, t))
+
+    await state.update_data(urls=processed, initial_msg=initial_msg_id)
+    if len(processed) == 1:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="cancel_shorten")]
+        ])
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Введите описание для {processed[0][0]} (или оставьте пустым).", keyboard)
         await state.set_state(LinkStates.waiting_for_title)
     else:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg.message_id,
-            text=f"Начинаю сокращение {len(processed_urls)} ссылок..."
-        )
         await state.set_state(LinkStates.waiting_for_mass_title)
         await process_mass_urls(message, state)
 
@@ -144,91 +144,51 @@ async def process_mass_urls(message: Message, state: FSMContext):
     data = await state.get_data()
     urls = data.get("urls", [])
     initial_msg_id = data.get("initial_msg")
-    try:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text=f"Сокращаю '{urls[0][0]}'..."
-        )
-    except TelegramBadRequest as e:
-        logger.error(f"Ошибка редактирования сообщения: {e}")
-        msg = await message.answer(f"Сокращаю '{urls[0][0]}'...")
-        await state.update_data(initial_msg=msg.message_id)
     if not urls:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text="Ошибка: список ссылок пуст. Попробуйте снова.",
-            reply_markup=get_main_keyboard()
-        )
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Ошибка: список пуст.", get_main_keyboard())
         await state.clear()
         return
-
     current_url, current_title = urls[0]
     await state.update_data(
         current_url=current_url,
         current_title=current_title,
         urls=urls[1:],
         successful_links=data.get("successful_links", []),
-        failed_links=data.get("failed_links", []),
-        initial_msg=initial_msg_id
+        failed_links=data.get("failed_links", [])
     )
-    await state.set_state(LinkStates.waiting_for_mass_title)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Отмена", callback_data="cancel_shorten")]
+    ])
+    await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Сокращаю: {current_url}", keyboard)
 
 @router.message(LinkStates.waiting_for_title)
 async def process_single_title(message: Message, state: FSMContext):
     await safe_delete(message)
     data = await state.get_data()
-    urls = data.get("urls", [])
+    url, _ = data.get("urls", [(None, None)])[0]
+    title = message.text.strip() if message.text else "Без названия"
     initial_msg_id = data.get("initial_msg")
-    url, _ = urls[0] if urls else (None, None)
-    title = message.text.strip() if message.text else None
-    if not title:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text="Пожалуйста, введите название. Оно не может быть пустым."
-        )
-        return
     success, result = await process_and_save_link(url, title, message, state)
-    try:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text=f"Готово ✅\n{result}",
-            reply_markup=get_restart_keyboard()
-        )
-    except TelegramBadRequest as e:
-        logger.error(f"Ошибка редактирования сообщения: {e}")
-        await message.answer(f"Готово ✅\n{result}", reply_markup=get_restart_keyboard())
+    await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Готово ✅\n{result}", get_restart_keyboard())
     await state.clear()
 
 @router.message(LinkStates.waiting_for_mass_title)
 async def process_mass_title(message: Message, state: FSMContext):
     await safe_delete(message)
     data = await state.get_data()
-    urls = data.get("urls", [])
-    initial_msg_id = data.get("initial_msg")
     current_url, current_title = data.get("current_url"), data.get("current_title")
-    title = message.text.strip() if message.text else current_title
-    if not title and current_title is None:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text="Пожалуйста, введите название. Оно не может быть пустым."
-        )
-        return
+    title = message.text.strip() if message.text else current_title or "Без названия"
+    initial_msg_id = data.get("initial_msg")
+
     success, result = await process_and_save_link(current_url, title, message, state)
     if success:
-        successful_links = data.get("successful_links", [])
-        successful_links.append({"title": title or "Без названия", "short_url": result})
-        await state.update_data(successful_links=successful_links)
+        data.setdefault("successful_links", []).append({"title": title, "short_url": result})
     else:
-        failed_links = data.get("failed_links", [])
-        failed_links.append(f"Ошибка: {result}")
-        await state.update_data(failed_links=failed_links)
+        data.setdefault("failed_links", []).append(f"{current_url}: {result}")
 
-    if urls:
+    await state.update_data(successful_links=data["successful_links"], failed_links=data["failed_links"])
+
+    if data.get("urls"):
         await process_mass_urls(message, state)
     else:
         await finalize_mass_processing(message, state)
@@ -236,24 +196,16 @@ async def process_mass_title(message: Message, state: FSMContext):
 async def finalize_mass_processing(message: Message, state: FSMContext):
     data = await state.get_data()
     initial_msg_id = data.get("initial_msg")
-    successful_links = data.get("successful_links", [])
-    failed_links = data.get("failed_links", [])
-    response = f"Готово ✅\nДобавлено {len(successful_links)} ссылок:\n"
-    if successful_links:
-        for i, link in enumerate(successful_links, 1):
-            response += f"{i}. {link['title']} — {hlink(link['short_url'], link['short_url'])}\n"
-    if failed_links:
-        response += "\nПроблемы:\n" + "\n".join(failed_links)
-    try:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=initial_msg_id,
-            text=response,
-            reply_markup=get_restart_keyboard()
-        )
-    except TelegramBadRequest as e:
-        logger.error(f"Ошибка редактирования сообщения: {e}")
-        await message.answer(response, reply_markup=get_restart_keyboard())
+    s = data.get("successful_links", [])
+    f = data.get("failed_links", [])
+
+    text = f"Готово ✅\nДобавлено: {len(s)}\n"
+    for i, link in enumerate(s, 1):
+        text += f"{i}. {link['title']} — {hlink(link['short_url'], link['short_url'])}\n"
+    if f:
+        text += "\nОшибки:\n" + "\n".join(f)
+
+    await safe_edit(message.bot, message.chat.id, initial_msg_id, text, get_restart_keyboard())
     await state.clear()
 
 @router.message(F.text == "Мои ссылки")
@@ -267,7 +219,7 @@ async def show_user_links(message: Message, state: FSMContext):
     await state.update_data(links=links, page=1)
     await send_links_page(message, links, 1)
 
-async def send_links_page(message_or_cb, links, page):
+async def send_links_page(message: Message, links, page):
     per_page = 5
     total_pages = math.ceil(len(links) / per_page)
     page = max(1, min(page, total_pages))
@@ -275,39 +227,15 @@ async def send_links_page(message_or_cb, links, page):
     end = start + per_page
     current_links = links[start:end]
 
-    text = "<b>Ваши ссылки:</b>\n"
-    for link in current_links:
-        text += f"📎 {link[1]}\n🔗 {hlink(link[2], link[2])}\n📅 {link[3][:10]}\n/view_{link[0]}\n\n"
-
     keyboard = []
+    for link in current_links:
+        link_id, title, short_url, created_at = link
+        keyboard.append([InlineKeyboardButton(text=f"📍 {title}", callback_data=f"link_{link_id}")])
     if total_pages > 1:
-        keyboard += get_pagination_keyboard(page, total_pages)
-    if isinstance(message_or_cb, Message):
-        await message_or_cb.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-    elif isinstance(message_or_cb, CallbackQuery):
-        await message_or_cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-        await message_or_cb.answer()
+        keyboard.append(get_pagination_keyboard(page, total_pages)[0])  # Добавляем пагинацию
 
-@router.message(F.text.regexp(r"/view_\d+"))
-async def view_link_from_text(message: Message):
-    await safe_delete(message)
-    link_id = int(message.text.split("_")[-1])
-    user_id = message.from_user.id
-    link = await get_link_by_id(link_id, user_id)
-    if not link:
-        await message.answer("Ошибка: ссылка не найдена.")
-        return
-    _, _, long_url, short_url, title, _, created_at = link
-    text = f"🔗 {hlink(short_url, short_url)}\n📎 {title}\n📅 Создана: {created_at[:10]}\n🔍 Исходник: {long_url}"
-    await message.answer(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at))
-
-@router.callback_query(F.data.startswith("page_"))
-async def paginate_links(callback: CallbackQuery, state: FSMContext):
-    page = int(callback.data.split("_")[-1])
-    data = await state.get_data()
-    links = data.get("links", [])
-    await state.update_data(page=page)
-    await send_links_page(callback, links, page)
+    text = "<b>📎 Ваши ссылки:</b>"
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
 @router.callback_query(F.data.startswith("link_"))
 async def show_link_card(callback: CallbackQuery, state: FSMContext):
@@ -317,10 +245,20 @@ async def show_link_card(callback: CallbackQuery, state: FSMContext):
     if not link:
         await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
         return
-    _, _, long_url, short_url, title, _, created_at = link
-    text = f"🔗 {hlink(short_url, short_url)}\n📎 {title}\n📅 Создана: {created_at[:10]}\n🔍 Исходник: {long_url}"
-    card_msg = await callback.message.edit_text(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at))
-    await state.update_data(card_msg_id=card_msg.message_id)
+    _, _, long_url, short_url, title, vk_key, created_at = link
+
+    # Получаем статистику асинхронно
+    stats = await get_link_stats(vk_key, VK_TOKEN)
+    views = stats.get("views", 0) if "views" in stats else 0
+
+    text = (
+        f"📍 {title}\n"
+        f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
+        f"📆 {created_at[:10]}\n"
+        f"👁 {views} переходов"
+    )
+    keyboard = get_link_card_keyboard(link_id, title, long_url, short_url, created_at)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("stats_"))
 async def show_stats(callback: CallbackQuery):
@@ -331,14 +269,10 @@ async def show_stats(callback: CallbackQuery):
         await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
         return
     _, _, _, short_url, _, vk_key, _ = link
-    await callback.message.answer("Получаю статистику...")
-    try:
-        stats = await get_link_stats(vk_key, VK_TOKEN)
-        text = f"Статистика по {short_url}\n" + format_link_stats(stats, short_url)
-        await callback.message.edit_text(text, reply_markup=get_stats_keyboard())
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {e}")
-        await callback.message.edit_text(f"Ошибка: не удалось получить статистику ({str(e)})", reply_markup=get_stats_keyboard())
+
+    stats = await get_link_stats(vk_key, VK_TOKEN)
+    text = f"Статистика по {short_url}\n" + format_link_stats(stats, short_url)
+    await callback.message.edit_text(text, reply_markup=get_stats_keyboard())
 
 @router.callback_query(F.data == "back_from_stats")
 async def back_from_stats(callback: CallbackQuery, state: FSMContext):
@@ -346,14 +280,14 @@ async def back_from_stats(callback: CallbackQuery, state: FSMContext):
     page = data.get("page", 1)
     links = await get_links_by_user(callback.from_user.id)
     await state.update_data(links=links, page=page)
-    await send_links_page(callback, links, page)
+    await send_links_page(callback.message, links, page)
 
 @router.callback_query(F.data.startswith("rename_"))
 async def ask_new_title(callback: CallbackQuery, state: FSMContext):
     link_id = int(callback.data.split("_")[1])
     await state.set_state(LinkStates.waiting_for_new_title)
     await state.update_data(rename_link_id=link_id)
-    await callback.message.answer("Жду новое название ссылки...", reply_markup=ReplyKeyboardRemove())
+    await callback.message.answer("Введите новое название ссылки.", reply_markup=ReplyKeyboardRemove())
 
 @router.message(LinkStates.waiting_for_new_title)
 async def set_new_title(message: Message, state: FSMContext):
@@ -364,24 +298,32 @@ async def set_new_title(message: Message, state: FSMContext):
     card_msg_id = data.get("card_msg_id")
     user_id = message.from_user.id
     if not new_title:
-        await message.answer("Пожалуйста, введите название. Оно не может быть пустым.")
+        await message.answer("Ошибка: название не может быть пустым. Попробуйте снова.")
         return
     await message.answer("Обновляю название...")
     if await rename_link(link_id, user_id, new_title):
         link = await get_link_by_id(link_id, user_id)
         if link:
-            _, _, long_url, short_url, _, _, created_at = link
-            text = f"🔗 {hlink(short_url, short_url)}\n📎 {new_title}\n📅 Создана: {created_at[:10]}\n🔍 Исходник: {long_url}"
+            _, _, long_url, short_url, _, vk_key, created_at = link
+            stats = await get_link_stats(vk_key, VK_TOKEN)
+            views = stats.get("views", 0) if "views" in stats else 0
+            text = (
+                f"📍 {new_title}\n"
+                f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
+                f"📆 {created_at[:10]}\n"
+                f"👁 {views} переходов"
+            )
             try:
                 await message.bot.edit_message_text(
                     chat_id=message.chat.id,
                     message_id=card_msg_id,
                     text=text,
-                    reply_markup=get_restart_keyboard()
+                    reply_markup=get_link_card_keyboard(link_id, new_title, long_url, short_url, created_at),
+                    parse_mode="HTML"
                 )
             except TelegramBadRequest as e:
                 logger.error(f"Ошибка редактирования сообщения: {e}")
-                await message.answer(text, reply_markup=get_restart_keyboard())
+                await message.answer(text, reply_markup=get_link_card_keyboard(link_id, new_title, long_url, short_url, created_at), parse_mode="HTML")
     else:
         await message.answer("Ошибка: не удалось обновить название.", reply_markup=get_restart_keyboard())
     await state.clear()
@@ -395,7 +337,7 @@ async def confirm_delete(callback: CallbackQuery):
         await callback.message.answer("Удаляю ссылку...")
         if await delete_link(link_id, user_id):
             await callback.message.delete()
-            await callback.answer("✅ Ссылка удалена")
+            await callback.message.answer("✅ Ссылка удалена.", reply_markup=get_main_keyboard())
         else:
             await callback.answer("Ошибка удаления", show_alert=True)
     elif parts[1] == "no":
@@ -405,8 +347,16 @@ async def confirm_delete(callback: CallbackQuery):
         if not link:
             await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
             return
-        _, _, long_url, short_url, title, _, created_at = link
-        await callback.message.edit_reply_markup(reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at))
+        _, _, long_url, short_url, title, vk_key, created_at = link
+        stats = await get_link_stats(vk_key, VK_TOKEN)
+        views = stats.get("views", 0) if "views" in stats else 0
+        text = (
+            f"📍 {title}\n"
+            f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
+            f"📆 {created_at[:10]}\n"
+            f"👁 {views} переходов"
+        )
+        await callback.message.edit_text(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at), parse_mode="HTML")
     else:
         link_id = int(parts[1])
         user_id = callback.from_user.id
@@ -414,8 +364,16 @@ async def confirm_delete(callback: CallbackQuery):
         if not link:
             await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
             return
-        _, _, _, short_url, title, _, _ = link
-        await callback.message.edit_reply_markup(reply_markup=get_delete_confirm_keyboard(link_id, title, short_url))
+        _, _, long_url, short_url, title, vk_key, created_at = link
+        stats = await get_link_stats(vk_key, VK_TOKEN)
+        views = stats.get("views", 0) if "views" in stats else 0
+        text = (
+            f"📍 {title}\n"
+            f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
+            f"📆 {created_at[:10]}\n"
+            f"👁 {views} переходов"
+        )
+        await callback.message.edit_text(text, reply_markup=get_delete_confirm_keyboard(link_id, title, short_url), parse_mode="HTML")
 
 def setup_handlers(dp):
     dp.include_router(router)
