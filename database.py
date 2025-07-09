@@ -1,5 +1,9 @@
 import aiosqlite
 from datetime import datetime
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 async def init_db():
     async with aiosqlite.connect("links.db") as db:
@@ -17,6 +21,7 @@ async def init_db():
         await db.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)
         """)
+        logger.info("База данных links.db инициализирована")
         await db.commit()
 
 async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_key: str):
@@ -27,15 +32,17 @@ async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_
                 (user_id, short_url)
             )
             if await cursor.fetchone():
+                logger.info(f"Ссылка {short_url} уже существует для user_id {user_id}")
                 return False
             await db.execute(
                 "INSERT INTO links (user_id, long_url, short_url, title, vk_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, long_url, short_url, title or "Без подписи", vk_key, datetime.now().isoformat())
             )
             await db.commit()
+            logger.info(f"Успешно сохранена ссылка {short_url} для user_id {user_id}")
             return True
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error при сохранении ссылки {short_url} для user_id {user_id}: {e}")
         return False
 
 async def get_links_by_user(user_id: int):
@@ -45,9 +52,11 @@ async def get_links_by_user(user_id: int):
                 "SELECT id, title, short_url, created_at FROM links WHERE user_id = ? ORDER BY created_at DESC",
                 (user_id,)
             )
-            return await cursor.fetchall()
+            links = await cursor.fetchall()
+            logger.info(f"Получено {len(links)} ссылок для user_id {user_id}")
+            return links
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error при получении ссылок для user_id {user_id}: {e}")
         return []
 
 async def get_link_by_id(link_id: int, user_id: int):
@@ -59,7 +68,7 @@ async def get_link_by_id(link_id: int, user_id: int):
             )
             return await cursor.fetchone()
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error при получении ссылки id {link_id}: {e}")
         return None
 
 async def delete_link(link_id: int, user_id: int):
@@ -72,7 +81,7 @@ async def delete_link(link_id: int, user_id: int):
             await db.commit()
             return cursor.rowcount > 0
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error при удалении ссылки id {link_id}: {e}")
         return False
 
 async def rename_link(link_id: int, user_id: int, new_title: str):
@@ -85,5 +94,5 @@ async def rename_link(link_id: int, user_id: int, new_title: str):
             await db.commit()
             return True
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error при переименовании ссылки id {link_id}: {e}")
         return False
