@@ -9,6 +9,8 @@ async def shorten_link(long_url: str, vk_token: str) -> str:
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get("https://api.vk.com/method/utils.getShortLink", params=params) as resp:
+                if resp.status != 200:
+                    raise ValueError(f"VK API вернул статус {resp.status}")
                 data = await resp.json()
                 if "response" in data and "short_url" in data["response"]:
                     short_url = data["response"]["short_url"]
@@ -23,15 +25,23 @@ async def shorten_link(long_url: str, vk_token: str) -> str:
             raise ValueError(f"Сетевая ошибка: {str(e)}")
 
 async def get_link_stats(vk_key: str, vk_token: str) -> dict:
-    params = {"key": vk_key, "access_token": vk_token, "v": "5.199", "extended": 1, "interval": "forever"}
+    params = {
+        "key": vk_key,
+        "access_token": vk_token,
+        "v": "5.199",
+        "extended": 1,
+        "interval": "forever"
+    }
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get("https://api.vk.com/method/utils.getLinkStats", params=params) as resp:
+                if resp.status != 200:
+                    raise ValueError(f"VK API вернул статус {resp.status}")
                 data = await resp.json()
                 logger.info(f"Ответ VK API для ключа {vk_key}: {data}")
                 if "response" in data:
                     response_data = data["response"]
-                    if not response_data.get("views", 0) and not response_data.get("stats") and not response_data.get("sex_age"):
+                    if not any([response_data.get("views"), response_data.get("stats"), response_data.get("sex_age")]):
                         return {"views": 0, "message": "Нет данных по этой ссылке"}
                     return response_data
                 else:
