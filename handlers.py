@@ -75,12 +75,17 @@ async def process_url(message: Message, state: FSMContext):
     await safe_delete(message)
     data = await state.get_data()
     initial_msg_id = data.get("initial_msg")
-    initial_msg = await message.bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=initial_msg_id,
-        text="Проверяю ссылки..."
-    )
-    await state.update_data(initial_msg=initial_msg.message_id)
+    try:
+        initial_msg = await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=initial_msg_id,
+            text="Проверяю ссылки..."
+        )
+        await state.update_data(initial_msg=initial_msg.message_id)
+    except TelegramBadRequest as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        initial_msg = await message.answer("Проверяю ссылки...")
+        await state.update_data(initial_msg=initial_msg.message_id)
     urls = [line.strip() for line in message.text.split("\n") if line.strip()]
     if len(urls) > MAX_LINKS_PER_BATCH:
         await message.bot.edit_message_text(
@@ -139,7 +144,16 @@ async def process_mass_urls(message: Message, state: FSMContext):
     data = await state.get_data()
     urls = data.get("urls", [])
     initial_msg_id = data.get("initial_msg")
-
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=initial_msg_id,
+            text=f"Сокращаю '{urls[0][0]}'..."
+        )
+    except TelegramBadRequest as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        msg = await message.answer(f"Сокращаю '{urls[0][0]}'...")
+        await state.update_data(initial_msg=msg.message_id)
     if not urls:
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
@@ -159,12 +173,6 @@ async def process_mass_urls(message: Message, state: FSMContext):
         failed_links=data.get("failed_links", []),
         initial_msg=initial_msg_id
     )
-
-    await message.bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=initial_msg_id,
-        text=f"Сокращаю '{current_url}'..."
-    )
     await state.set_state(LinkStates.waiting_for_mass_title)
 
 @router.message(LinkStates.waiting_for_title)
@@ -183,12 +191,16 @@ async def process_single_title(message: Message, state: FSMContext):
         )
         return
     success, result = await process_and_save_link(url, title, message, state)
-    await message.bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=initial_msg_id,
-        text=f"Готово ✅\n{result}",
-        reply_markup=get_restart_keyboard()
-    )
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=initial_msg_id,
+            text=f"Готово ✅\n{result}",
+            reply_markup=get_restart_keyboard()
+        )
+    except TelegramBadRequest as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        await message.answer(f"Готово ✅\n{result}", reply_markup=get_restart_keyboard())
     await state.clear()
 
 @router.message(LinkStates.waiting_for_mass_title)
@@ -232,12 +244,16 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
             response += f"{i}. {link['title']} — {hlink(link['short_url'], link['short_url'])}\n"
     if failed_links:
         response += "\nПроблемы:\n" + "\n".join(failed_links)
-    await message.bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=initial_msg_id,
-        text=response,
-        reply_markup=get_restart_keyboard()
-    )
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=initial_msg_id,
+            text=response,
+            reply_markup=get_restart_keyboard()
+        )
+    except TelegramBadRequest as e:
+        logger.error(f"Ошибка редактирования сообщения: {e}")
+        await message.answer(response, reply_markup=get_restart_keyboard())
     await state.clear()
 
 @router.message(F.text == "Мои ссылки")
