@@ -2,7 +2,7 @@ from aiogram import Router, F, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.markdown import hlink
 from aiogram.exceptions import TelegramBadRequest
 
@@ -38,13 +38,18 @@ async def safe_edit(bot, chat_id, message_id, text, reply_markup=None):
             chat_id=chat_id,
             message_id=message_id,
             text=text,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode="HTML"
         )
     except TelegramBadRequest as e:
         logger.error(f"Ошибка редактирования сообщения: {e}")
-        return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def process_and_save_link(url: str, title: str, message: Message, state: FSMContext) -> tuple[bool, str]:
+    if not VK_TOKEN:
+        raise RuntimeError("VK_TOKEN не задан!")
+    if len(title) > 100:
+        return False, "Слишком длинное название (максимум 100 символов)."
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
@@ -58,8 +63,7 @@ async def process_and_save_link(url: str, title: str, message: Message, state: F
         else:
             return False, f"Ссылка '{url}' уже существует."
     except Exception as e:
-        logger.error("‼️ Ошибка при сокращении или сохранении ссылки:")
-        logger.error(traceback.format_exc())
+        logger.error(f"Ошибка при сокращении или сохранении ссылки: {e}")
         return False, str(e)
 
 @router.message(CommandStart())
@@ -69,11 +73,12 @@ async def cmd_start(message: Message, state: FSMContext):
     user_name = message.from_user.first_name or "пользователь"
     await message.answer(
         f"Привет, {user_name}! Добро пожаловать в vkcc-link-bot — ваш инструмент для работы со ссылками. Выберите действие ниже.",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_main_keyboard(),
+        parse_mode="HTML"
     )
     await state.clear()
 
-@router.message(F.text == "Сократить ссылку")
+@router.message(F.text.lower().strip() == "сократить ссылку")
 async def start_shorten(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Пользователь {message.from_user.id} начал сокращение ссылки")
@@ -89,7 +94,8 @@ async def cancel_shorten(callback: CallbackQuery, state: FSMContext):
     await safe_delete(callback.message)
     await callback.message.answer(
         "Действие отменено. Вы вернулись в главное меню.",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_main_keyboard(),
+        parse_mode="HTML"
     )
     await state.clear()
 
@@ -99,9 +105,8 @@ async def process_url(message: Message, state: FSMContext):
     data = await state.get_data()
     initial_msg_id = data.get("initial_msg")
     try:
-        await message.bot.get_message(chat_id=message.chat.id, message_id=initial_msg_id)
         await safe_edit(message.bot, message.chat.id, initial_msg_id, "Проверяю ссылки...")
-    except (TelegramBadRequest, ValueError):
+    except TelegramBadRequest:
         logger.error(f"Сообщение {initial_msg_id} недоступно для редактирования.")
         msg = await message.answer("Проверяю ссылки...")
         await state.update_data(initial_msg=msg.message_id)
@@ -208,13 +213,13 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
     await safe_edit(message.bot, message.chat.id, initial_msg_id, text, get_restart_keyboard())
     await state.clear()
 
-@router.message(F.text == "Мои ссылки")
+@router.message(F.text.lower().strip() == "мои ссылки")
 async def show_user_links(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Запрос списка ссылок для user_id={message.from_user.id}")
     links = await get_links_by_user(message.from_user.id)
     if not links:
-        await message.answer("У вас пока нет сохранённых ссылок.", reply_markup=get_main_keyboard())
+        await message.answer("У вас пока нет сохранённых ссылок.", reply_markup=get_main_keyboard(), parse_mode="HTML")
         return
     await state.update_data(links=links, page=1)
     await send_links_page(message, links, 1)
@@ -235,7 +240,7 @@ async def send_links_page(message: Message, links, page):
         keyboard.append(get_pagination_keyboard(page, total_pages)[0])  # Добавляем пагинацию
 
     text = "<b>📎 Ваши ссылки:</b>"
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("link_"))
 async def show_link_card(callback: CallbackQuery, state: FSMContext):
@@ -274,7 +279,7 @@ async def show_stats(callback: CallbackQuery):
     stats = await get_link_stats(vk_key, VK_TOKEN)
     text = f"Статистика по {short_url}\n" + format_link_stats(stats, short_url)
     keyboard = get_stats_keyboard()
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @router.callback_query(F.data == "back_from_stats")
 async def back_from_stats(callback: CallbackQuery, state: FSMContext):
@@ -299,8 +304,8 @@ async def set_new_title(message: Message, state: FSMContext):
     link_id = data.get("rename_link_id")
     card_msg_id = data.get("card_msg_id")
     user_id = message.from_user.id
-    if not new_title:
-        await message.answer("Ошибка: название не может быть пустым. Попробуйте снова.")
+    if not new_title or len(new_title) > 100:
+        await message.answer("Ошибка: название не может быть пустым или длиннее 100 символов. Попробуйте снова.")
         return
     await message.answer("Обновляю название...")
     if await rename_link(link_id, user_id, new_title):
@@ -337,11 +342,14 @@ async def confirm_delete(callback: CallbackQuery):
         link_id = int(parts[2])
         user_id = callback.from_user.id
         await callback.message.answer("Удаляю ссылку...")
-        if await delete_link(link_id, user_id):
+        try:
             await callback.message.delete()
-            await callback.message.answer("✅ Ссылка удалена.", reply_markup=get_main_keyboard())
-        else:
-            await callback.answer("Ошибка удаления", show_alert=True)
+            await callback.message.answer("✅ Ссылка удалена.", reply_markup=get_main_keyboard(), parse_mode="HTML")
+        except TelegramBadRequest as e:
+            logger.error(f"Ошибка удаления сообщения: {e}")
+            await callback.message.answer("✅ Ссылка удалена.", reply_markup=get_main_keyboard(), parse_mode="HTML")
+        if not await delete_link(link_id, user_id):
+            await callback.answer("Ошибка удаления ссылки", show_alert=True)
     elif parts[1] == "no":
         link_id = int(parts[2])
         user_id = callback.from_user.id
@@ -377,5 +385,7 @@ async def confirm_delete(callback: CallbackQuery):
         )
         await callback.message.edit_text(text, reply_markup=get_delete_confirm_keyboard(link_id, title, short_url), parse_mode="HTML")
 
+def setup_handlers(dp):
+    dp.include_router(router)
 def setup_handlers(dp):
     dp.include_router(router)
