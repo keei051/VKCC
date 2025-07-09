@@ -50,17 +50,25 @@ def format_link_stats(stats: dict, short_url: str) -> str:
     if "countries" in stats:
         response += "\n🌍 География (переходы):\n"
         total_views = stats.get("views", 1)  # Избегаем деления на ноль
+        country_map = {
+            1: "Россия", 2: "Украина", 3: "Беларусь", 4: "Казахстан", 5: "Германия",
+            7: "Финляндия", 10: "США", 13: "Франция", 14: "Италия", 17: "Испания"
+        }
         for country in stats["countries"]:
             country_id = country["country_id"]
             views = country["views"]
-            country_name = "Неизвестная страна"  # Требуется парсер для country_id (например, через справочник)
-            response += f"— {country_name} (ID {country_id}): {views} ({views/total_views*100:.1f}%)\n"
+            country_name = country_map.get(country_id, f"Неизвестная страна (ID {country_id})")
+            response += f"— {country_name}: {views} ({views/total_views*100:.1f}%)\n"
         if "cities" in stats:
             response += "Города:\n"
+            city_map = {
+                1: "Москва", 2: "Санкт-Петербург", 99: "Уфа", 56: "Казань", 3: "Новосибирск",
+                4: "Екатеринбург", 66: "Нижний Новгород"
+            }
             for city in stats["cities"]:
                 city_id = city["city_id"]
                 views = city["views"]
-                city_name = "Неизвестный город"  # Требуется парсер для city_id
-                response += f"  — {city_name} (ID {city_id}): {views} ({views/total_views*100:.1f}%)\n"
+                city_name = city_map.get(city_id, f"Неизвестный город (ID {city_id})")
+                response += f"  — {city_name}: {views} ({views/total_views*100:.1f}%)\n"
 
     return response
