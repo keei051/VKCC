@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
 from aiogram.filters import CommandStart
-from keyboards import get_main_keyboard, get_link_actions_keyboard, get_link_card_keyboard, get_pagination_keyboard
+from keyboards import get_main_keyboard, get_link_list_keyboard, get_link_card_keyboard, get_pagination_keyboard, get_back_keyboard
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from vkcc import shorten_link, get_link_stats
 from utils import safe_delete, is_valid_url, format_link_stats
@@ -26,20 +26,18 @@ class LinkStates(StatesGroup):
     waiting_for_page = State()
 
 @router.message(CommandStart())
-@router.callback_query(F.data == "main_menu")
-async def start_command(message_or_callback: Message | CallbackQuery, state: FSMContext):
-    await safe_delete(message_or_callback if isinstance(message_or_callback, Message) else message_or_callback.message)
-    user_name = (message_or_callback.from_user.first_name or "пользователь") if isinstance(message_or_callback, Message) else (message_or_callback.message.from_user.first_name or "пользователь")
-    logger.info(f"Запуск команды /start для user_id={message_or_callback.from_user.id}")
-    await (message_or_callback.answer if isinstance(message_or_callback, Message) else message_or_callback.message.answer)(
+async def start_command(message: Message, state: FSMContext):
+    await safe_delete(message)
+    logger.info(f"Запуск команды /start для user_id={message.from_user.id}")
+    user_name = message.from_user.first_name or "пользователь"
+    await message.answer(
         f"Привет, {user_name}. Это профессиональный бот для работы со ссылками."
     )
     await asyncio.sleep(0.5)
-    await (message_or_callback.answer if isinstance(message_or_callback, Message) else message_or_callback.message.answer)(
-        "Функции:\n"
-        "- Сокращение до 50 ссылок с возможностью описания.\n"
-        "- Просмотр списка и статистики ссылок.\n"
-        "- Управление: переименование и удаление.\n\n"
+    await message.answer(
+        "Доступные функции:\n"
+        "- Сокращение до 50 ссылок с описанием.\n"
+        "- Просмотр и управление списком ссылок.\n"
         "Выберите действие ниже.",
         reply_markup=get_main_keyboard()
     )
@@ -104,11 +102,11 @@ async def process_mass_urls(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    current_url, current_title = urls[0]  # Берем первый элемент без удаления
+    current_url, current_title = urls[0]
     await state.update_data(
         current_url=current_url,
         current_title=current_title,
-        urls=urls[1:],  # Обрезаем первый элемент
+        urls=urls[1:],
         successful_links=data.get("successful_links", []),
         failed_links=data.get("failed_links", [])
     )
@@ -137,13 +135,13 @@ async def process_single_title(message: Message, state: FSMContext):
         vk_key = short_url.split("/")[-1]
         logger.info(f"Попытка сохранить ссылку: user_id={message.from_user.id}, short_url={short_url}, title={title}")
         if await save_link(message.from_user.id, url, short_url, title, vk_key):
-            await message.answer(f"Ссылка успешно добавлена.\n{title or 'Без описания'}:\n{short_url}\nЧто дальше?", reply_markup=get_main_keyboard())
+            await message.answer(f"Ссылка успешно добавлена.\n{title or 'Без описания'}:\n{short_url}", reply_markup=get_main_keyboard())
         else:
-            await message.answer(f"Ссылка '{url}' уже существует.\nЧто дальше?", reply_markup=get_main_keyboard())
+            await message.answer(f"Ссылка '{url}' уже существует.", reply_markup=get_main_keyboard())
     except Exception as e:
         logger.error("‼️ Ошибка при сокращении или сохранении ссылки:")
         logger.error(traceback.format_exc())
-        await message.answer(f"Ошибка при сокращении: {str(e)}\nЧто дальше?", reply_markup=get_main_keyboard())
+        await message.answer(f"Ошибка при сокращении: {str(e)}", reply_markup=get_main_keyboard())
     await state.clear()
 
 @router.message(LinkStates.waiting_for_mass_title)
@@ -191,7 +189,7 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
             response += f"{i}. {link['title']}:\n{link['short_url']}\n"
     if failed_links:
         response += "\nПроблемы:\n" + "\n".join(failed_links)
-    await message.answer(response + "\nЧто дальше?", reply_markup=get_main_keyboard())
+    await message.answer(response, reply_markup=get_main_keyboard())
     await state.clear()
 
 @router.message(F.text == "Мои ссылки")
@@ -218,7 +216,7 @@ async def show_page(message: Message, state: FSMContext):
     keyboard = []
     for link in current_links:
         link_id, title, short_url, _ = link
-        keyboard.append(get_link_actions_keyboard(link_id, title or "Без описания", short_url))
+        keyboard.append(get_link_list_keyboard(link_id, title or "Без описания", short_url))
     if total_pages > 1:
         pagination = get_pagination_keyboard(current_page, total_pages)
         keyboard.append(pagination)
@@ -253,7 +251,17 @@ async def process_callback(callback: CallbackQuery):
 
     link_id, _, long_url, short_url, title, vk_key, created_at = link
 
-    if action == "stats":
+    if action == "view":
+        response = f"Подробности ссылки:\n"
+        response += f"Описание: {title or 'Без описания'}\n"
+        response += f"Оригинальная: {long_url}\n"
+        response += f"Сокращённая: {short_url}\n"
+        response += f"Добавлена: {created_at}"
+        keyboard = get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at)
+        await callback.message.answer(response, reply_markup=keyboard)
+        await callback.answer()
+
+    elif action == "stats":
         try:
             logger.info(f"Запрос статистики для ссылки {short_url}, user_id={user_id}")
             stats = await get_link_stats(vk_key, VK_TOKEN)
@@ -263,7 +271,7 @@ async def process_callback(callback: CallbackQuery):
             await safe_delete(sent_message)
         except Exception as e:
             logger.error(f"Ошибка получения статистики для {short_url}: {e}")
-            await callback.message.answer(f"Ошибка получения статистики: {str(e)}. Повторите позже.", reply_markup=get_back_keyboard())
+            await callback.message.answer(f"Ошибка получения статистики: {str(e)}. Повторите позже.", reply_markup=get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at))
 
     elif action == "rename":
         await callback.message.answer("Введите новое описание для ссылки.", reply_markup=ReplyKeyboardRemove())
@@ -279,20 +287,17 @@ async def process_callback(callback: CallbackQuery):
 
     elif action == "delete_yes":
         if await delete_link(link_id, user_id):
-            await callback.message.answer("Ссылка удалена.\nЧто дальше?", reply_markup=get_main_keyboard())
+            await callback.message.answer("Ссылка удалена.", reply_markup=get_main_keyboard())
         else:
-            await callback.message.answer("Ошибка при удалении.\nЧто дальше?", reply_markup=get_main_keyboard())
+            await callback.message.answer("Ошибка при удалении.", reply_markup=get_main_keyboard())
         await callback.answer()
 
     elif action == "delete_no":
-        await callback.message.answer("Удаление отменено.\nЧто дальше?", reply_markup=get_link_actions_keyboard(link_id, title or "Без описания", short_url))
+        await callback.message.answer("Удаление отменено.", reply_markup=get_link_card_keyboard(link_id, title or "Без описания", long_url, short_url, created_at))
         await callback.answer()
 
     elif action == "back":
         await show_links(callback.message)
-
-    elif action.startswith("main_menu"):
-        await start_command(callback, state)
 
     await callback.answer()
 
@@ -302,9 +307,9 @@ async def process_new_title(message: Message, state: FSMContext):
     data = await state.get_data()
     link_id = data.get("link_id")
     if await rename_link(link_id, message.from_user.id, message.text.strip()):
-        await message.answer("Описание обновлено.\nЧто дальше?", reply_markup=get_main_keyboard())
+        await message.answer("Описание обновлено.", reply_markup=get_main_keyboard())
     else:
-        await message.answer("Ошибка при обновлении описания.\nЧто дальше?", reply_markup=get_main_keyboard())
+        await message.answer("Ошибка при обновлении описания.", reply_markup=get_main_keyboard())
     await state.clear()
 
 def setup_handlers(dp):
