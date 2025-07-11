@@ -2,17 +2,18 @@ from aiogram import Router, F, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from aiogram.utils.markdown import hlink
 from aiogram.exceptions import TelegramBadRequest
+from datetime import datetime
 
 from keyboards import (
-    get_main_keyboard,
+    get_main_inline_keyboard,
+    get_restart_keyboard,
     get_link_card_keyboard,
     get_stats_keyboard,
     get_delete_confirm_keyboard,
     get_rename_keyboard,
-    get_restart_keyboard,
 )
 from database import save_link, get_links_by_user, get_link_by_id, delete_link, rename_link
 from utils import is_valid_url, safe_delete, format_link_stats
@@ -44,6 +45,9 @@ async def safe_edit(bot, chat_id, message_id, text, reply_markup=None):
     except TelegramBadRequest as e:
         logger.error(f"Ошибка редактирования сообщения: {e}")
         return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception as e:
+        logger.exception(f"Неизвестная ошибка при редактировании сообщения: {e}")
+        return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def process_and_save_link(url: str, title: str, message: Message, state: FSMContext) -> tuple[bool, str]:
     if not VK_TOKEN:
@@ -73,7 +77,7 @@ async def cmd_start(message: Message, state: FSMContext):
     user_name = message.from_user.first_name or "пользователь"
     await message.answer(
         f"Привет, {user_name}! Добро пожаловать в vkcc-link-bot — ваш инструмент для работы со ссылками. Выберите действие ниже.",
-        reply_markup=get_main_keyboard(),
+        reply_markup=get_main_inline_keyboard(),
         parse_mode="HTML"
     )
     await state.clear()
@@ -89,15 +93,34 @@ async def start_shorten(message: Message, state: FSMContext):
     await state.update_data(initial_msg=msg.message_id)
     await state.set_state(LinkStates.waiting_for_url)
 
+@router.callback_query(F.data == "dummy_shorten")
+async def dummy_shorten_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not callback.message:
+        logger.error("Сообщение для callback отсутствует")
+        await callback.bot.send_message(callback.from_user.id, "Ошибка: сообщение недоступно. Попробуйте снова.", parse_mode="HTML")
+        return
+    await start_shorten(callback.message, state)
+
+@router.callback_query(F.data == "dummy_links")
+async def dummy_links_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    if not callback.message:
+        logger.error("Сообщение для callback отсутствует")
+        await callback.bot.send_message(callback.from_user.id, "Ошибка: сообщение недоступно. Попробуйте снова.", parse_mode="HTML")
+        return
+    await show_user_links(callback.message, state)
+
 @router.callback_query(F.data == "cancel_shorten")
-async def cancel_shorten(callback: CallbackQuery, state: FSMContext):
+async def dummy_restart_handler(callback: CallbackQuery, state: FSMContext):
     await safe_delete(callback.message)
-    await callback.message.answer(
-        "Действие отменено. Вы вернулись в главное меню.",
-        reply_markup=get_main_keyboard(),
-        parse_mode="HTML"
-    )
-    await state.clear()
+    await callback.answer("Вы вернулись в главное меню.")
+    if not callback.message:
+        logger.error("Сообщение для callback отсутствует")
+        await callback.bot.send_message(callback.from_user.id, "Вы вернулись в главное меню.", reply_markup=get_main_inline_keyboard(), parse_mode="HTML")
+        await state.clear()
+        return
+    await cmd_start(callback.message, state)
 
 @router.message(LinkStates.waiting_for_url)
 async def process_url(message: Message, state: FSMContext):
@@ -114,11 +137,11 @@ async def process_url(message: Message, state: FSMContext):
     urls = [line.strip() for line in message.text.split("\n") if line.strip()]
 
     if not urls:
-        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Ошибка: ни одной ссылки.", get_main_keyboard())
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Ошибка: ни одной ссылки.\n\n<b>Что дальше?</b>", get_main_inline_keyboard())
         await state.clear()
         return
     if len(urls) > MAX_LINKS_PER_BATCH:
-        await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Лимит: {MAX_LINKS_PER_BATCH} ссылок.", get_main_keyboard())
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Лимит: {MAX_LINKS_PER_BATCH} ссылок.\n\n<b>Что дальше?</b>", get_main_inline_keyboard())
         await state.clear()
         return
 
@@ -129,7 +152,7 @@ async def process_url(message: Message, state: FSMContext):
         else:
             u, t = url.strip(), None
         if not is_valid_url(u):
-            await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Ошибка: {u} — невалидная ссылка.", get_main_keyboard())
+            await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Ошибка: {u} — невалидная ссылка.\n\n<b>Что дальше?</b>", get_main_inline_keyboard())
             await state.clear()
             return
         processed.append((u, t))
@@ -150,7 +173,7 @@ async def process_mass_urls(message: Message, state: FSMContext):
     urls = data.get("urls", [])
     initial_msg_id = data.get("initial_msg")
     if not urls:
-        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Ошибка: список пуст.", get_main_keyboard())
+        await safe_edit(message.bot, message.chat.id, initial_msg_id, "Ошибка: список пуст.\n\n<b>Что дальше?</b>", get_main_inline_keyboard())
         await state.clear()
         return
     current_url, current_title = urls[0]
@@ -174,7 +197,7 @@ async def process_single_title(message: Message, state: FSMContext):
     title = message.text.strip() if message.text else "Без названия"
     initial_msg_id = data.get("initial_msg")
     success, result = await process_and_save_link(url, title, message, state)
-    await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Готово ✅\n{result}", get_restart_keyboard())
+    await safe_edit(message.bot, message.chat.id, initial_msg_id, f"Готово ✅\n{result}\n\n<b>Что дальше?</b>", get_restart_keyboard())
     await state.clear()
 
 @router.message(LinkStates.waiting_for_mass_title)
@@ -209,6 +232,7 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
         text += f"{i}. {link['title']} — {hlink(link['short_url'], link['short_url'])}\n"
     if f:
         text += "\nОшибки:\n" + "\n".join(f)
+    text += "\n<b>Что дальше?</b>"
 
     await safe_edit(message.bot, message.chat.id, initial_msg_id, text, get_restart_keyboard())
     await state.clear()
@@ -219,7 +243,7 @@ async def show_user_links(message: Message, state: FSMContext):
     logger.info(f"Запрос списка ссылок для user_id={message.from_user.id}")
     links = await get_links_by_user(message.from_user.id)
     if not links:
-        await message.answer("У вас пока нет сохранённых ссылок.", reply_markup=get_main_keyboard(), parse_mode="HTML")
+        await message.answer("У вас пока нет сохранённых ссылок.\n\n<b>Что дальше?</b>", reply_markup=get_main_inline_keyboard(), parse_mode="HTML")
         return
     await state.update_data(links=links, page=1)
     await send_links_page(message, links, 1)
@@ -235,6 +259,8 @@ async def send_links_page(message: Message, links, page):
     keyboard = []
     for link in current_links:
         link_id, title, short_url, created_at = link
+        # Форматируем created_at безопасно
+        created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
         keyboard.append([InlineKeyboardButton(text=f"📍 {title}", callback_data=f"link_{link_id}")])
     if total_pages > 1:
         keyboard.append(get_pagination_keyboard(page, total_pages)[0])  # Добавляем пагинацию
@@ -252,14 +278,17 @@ async def show_link_card(callback: CallbackQuery, state: FSMContext):
         return
     _, _, long_url, short_url, title, vk_key, created_at = link
 
+    # Форматируем created_at безопасно
+    created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
+
     # Получаем статистику асинхронно
     stats = await get_link_stats(vk_key, VK_TOKEN)
-    views = stats.get("views", 0) if "views" in stats else 0
+    views = stats.get("views", 0)
 
     text = (
         f"📍 {title}\n"
         f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
-        f"📆 {created_at[:10]}\n"
+        f"📆 {created_str}\n"
         f"👁 {views} переходов"
     )
     keyboard = get_link_card_keyboard(link_id, title, long_url, short_url, created_at)
@@ -312,13 +341,15 @@ async def set_new_title(message: Message, state: FSMContext):
         link = await get_link_by_id(link_id, user_id)
         if link:
             _, _, long_url, short_url, _, vk_key, created_at = link
+            # Форматируем created_at безопасно
+            created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
             stats = await get_link_stats(vk_key, VK_TOKEN)
-            views = stats.get("views", 0) if "views" in stats else 0
+            views = stats.get("views", 0)
             text = (
                 f"📍 {new_title}\n"
                 f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
-                f"📆 {created_at[:10]}\n"
-                f"👁 {views} переходов"
+                f"📆 {created_str}\n"
+                f"👁 {views} переходов\n\n<b>Что дальше?</b>"
             )
             try:
                 await message.bot.edit_message_text(
@@ -332,7 +363,7 @@ async def set_new_title(message: Message, state: FSMContext):
                 logger.error(f"Ошибка редактирования сообщения: {e}")
                 await message.answer(text, reply_markup=get_link_card_keyboard(link_id, new_title, long_url, short_url, created_at), parse_mode="HTML")
     else:
-        await message.answer("Ошибка: не удалось обновить название.", reply_markup=get_restart_keyboard())
+        await message.answer("Ошибка: не удалось обновить название.\n\n<b>Что дальше?</b>", reply_markup=get_restart_keyboard())
     await state.clear()
 
 @router.callback_query(F.data.startswith("delete_"))
@@ -344,10 +375,10 @@ async def confirm_delete(callback: CallbackQuery):
         await callback.message.answer("Удаляю ссылку...")
         try:
             await callback.message.delete()
-            await callback.message.answer("✅ Ссылка удалена.", reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await callback.message.answer("✅ Ссылка удалена.\n\n<b>Что дальше?</b>", reply_markup=get_main_inline_keyboard(), parse_mode="HTML")
         except TelegramBadRequest as e:
             logger.error(f"Ошибка удаления сообщения: {e}")
-            await callback.message.answer("✅ Ссылка удалена.", reply_markup=get_main_keyboard(), parse_mode="HTML")
+            await callback.message.answer("✅ Ссылка удалена.\n\n<b>Что дальше?</b>", reply_markup=get_main_inline_keyboard(), parse_mode="HTML")
         if not await delete_link(link_id, user_id):
             await callback.answer("Ошибка удаления ссылки", show_alert=True)
     elif parts[1] == "no":
@@ -358,12 +389,14 @@ async def confirm_delete(callback: CallbackQuery):
             await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
             return
         _, _, long_url, short_url, title, vk_key, created_at = link
+        # Форматируем created_at безопасно
+        created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
         stats = await get_link_stats(vk_key, VK_TOKEN)
-        views = stats.get("views", 0) if "views" in stats else 0
+        views = stats.get("views", 0)
         text = (
             f"📍 {title}\n"
             f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
-            f"📆 {created_at[:10]}\n"
+            f"📆 {created_str}\n"
             f"👁 {views} переходов"
         )
         await callback.message.edit_text(text, reply_markup=get_link_card_keyboard(link_id, title, long_url, short_url, created_at), parse_mode="HTML")
@@ -375,12 +408,14 @@ async def confirm_delete(callback: CallbackQuery):
             await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
             return
         _, _, long_url, short_url, title, vk_key, created_at = link
+        # Форматируем created_at безопасно
+        created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
         stats = await get_link_stats(vk_key, VK_TOKEN)
-        views = stats.get("views", 0) if "views" in stats else 0
+        views = stats.get("views", 0)
         text = (
             f"📍 {title}\n"
             f"🔗 <a href='{short_url}'>Открыть ссылку</a>\n"
-            f"📆 {created_at[:10]}\n"
+            f"📆 {created_str}\n"
             f"👁 {views} переходов"
         )
         await callback.message.edit_text(text, reply_markup=get_delete_confirm_keyboard(link_id, title, short_url), parse_mode="HTML")
