@@ -1,5 +1,6 @@
 import re
 import logging
+from datetime import datetime
 from aiogram.types import Message
 
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,15 @@ def is_valid_url(url: str) -> bool:
         r'(?::\d+)?(?:/[-a-zA-Z0-9@:%_\+.~#?&//=]*)?$'
     )
     return bool(pattern.match(url))
+
+def format_date(date_str: str) -> str:
+    """
+    Преобразует ISO-дату в 'YYYY-MM-DD'.
+    """
+    try:
+        return datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
+    except Exception:
+        return date_str[:10]
 
 def format_link_stats(stats: dict, short_url: str) -> str:
     if not stats or stats.get("views", 0) == 0:
