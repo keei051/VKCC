@@ -1,106 +1,83 @@
-import aiosqlite
-from datetime import datetime
-import logging
+import sqlite3
 import os
+import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.path.join("/app", "links.db")
+# Абсолютный путь к файлу базы данных
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "links.db")
+
+def get_db_connection():
+    return sqlite3.connect(DB_PATH)
 
 async def init_db():
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS links (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    long_url TEXT NOT NULL,
-                    short_url TEXT NOT NULL,
-                    title TEXT,
-                    vk_key TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-            """)
-            await db.execute("""
-                CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)
-            """)
-            logger.info(f"База данных {DB_PATH} инициализирована или проверена. Файл существует: {os.path.exists(DB_PATH)}")
-            await db.commit()
-    except Exception as e:
-        logger.error(f"Ошибка инициализации базы данных {DB_PATH}: {e}")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            short_url TEXT,
+            long_url TEXT,
+            title TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+    logger.info(f"База данных {DB_PATH} инициализирована или проверена. Файл существует: {os.path.exists(DB_PATH)}")
 
-async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_key: str):
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            logger.info(f"Попытка сохранить ссылку: user_id={user_id}, short_url={short_url}, title={title}")
-            cursor = await db.execute(
-                "SELECT id FROM links WHERE user_id = ? AND short_url = ?",
-                (user_id, short_url)
-            )
-            if await cursor.fetchone():
-                logger.info(f"Ссылка {short_url} уже существует для user_id {user_id}")
-                return False
-            await db.execute(
-                "INSERT INTO links (user_id, long_url, short_url, title, vk_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, long_url, short_url, title or "Без описания", vk_key, datetime.now().isoformat())
-            )
-            await db.commit()
-            logger.info(f"Успешно сохранена ссылка {short_url} для user_id {user_id}")
-            return True
-    except Exception as e:
-        logger.error(f"DB Error при сохранении ссылки {short_url} для user_id {user_id}: {e}")
-        return False
+def save_link(user_id: int, short_url: str, long_url: str, title: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO links (user_id, short_url, long_url, title)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, short_url, long_url, title))
+    conn.commit()
+    conn.close()
+    logger.info(f"Ссылка {short_url} сохранена для user_id {user_id}")
 
-async def get_links_by_user(user_id: int):
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            logger.info(f"Запрос ссылок для user_id={user_id}")
-            cursor = await db.execute(
-                "SELECT id, title, short_url, created_at FROM links WHERE user_id = ? ORDER BY created_at DESC",
-                (user_id,)
-            )
-            links = await cursor.fetchall()
-            logger.info(f"Найдено {len(links)} ссылок для user_id {user_id}")
-            return links
-    except Exception as e:
-        logger.error(f"DB Error при получении ссылок для user_id {user_id}: {e}")
-        return []
+def get_links_by_user(user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, title, short_url, created_at
+        FROM links
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    """, (user_id,))
+    result = cursor.fetchall()
+    conn.close()
+    logger.info(f"Найдено {len(result)} ссылок для user_id {user_id}")
+    return result
 
-async def get_link_by_id(link_id: int, user_id: int):
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                "SELECT id, user_id, long_url, short_url, title, vk_key, created_at FROM links WHERE id = ? AND user_id = ?",
-                (link_id, user_id)
-            )
-            return await cursor.fetchone()
-    except Exception as e:
-        logger.error(f"DB Error при получении ссылки id {link_id}: {e}")
-        return None
+def get_link_by_id(link_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id, short_url, long_url, title, created_at
+        FROM links
+        WHERE id = ?
+    """, (link_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result
 
-async def delete_link(link_id: int, user_id: int):
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute(
-                "DELETE FROM links WHERE id = ? AND user_id = ?",
-                (link_id, user_id)
-            )
-            await db.commit()
-            return cursor.rowcount > 0
-    except Exception as e:
-        logger.error(f"DB Error при удалении ссылки id {link_id}: {e}")
-        return False
+def delete_link(link_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM links WHERE id = ?", (link_id,))
+    conn.commit()
+    conn.close()
+    logger.info(f"Ссылка с id={link_id} удалена")
 
-async def rename_link(link_id: int, user_id: int, new_title: str):
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "UPDATE links SET title = ? WHERE id = ? AND user_id = ?",
-                (new_title, link_id, user_id)
-            )
-            await db.commit()
-            return True
-    except Exception as e:
-        logger.error(f"DB Error при переименовании ссылки id {link_id}: {e}")
-        return False
+def rename_link(link_id: int, new_title: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE links SET title = ? WHERE id = ?", (new_title, link_id))
+    conn.commit()
+    conn.close()
+    logger.info(f"Ссылка с id={link_id} переименована в {new_title}")
