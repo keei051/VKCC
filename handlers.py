@@ -21,7 +21,6 @@ from vkcc import shorten_link, get_link_stats
 from config import VK_TOKEN, MAX_LINKS_PER_BATCH
 import logging
 import math
-import traceback
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -43,6 +42,9 @@ async def safe_edit(bot, chat_id, message_id, text, reply_markup=None):
             parse_mode="HTML"
         )
     except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            logger.debug(f"Сообщение не изменено, игнорируем: {e}")
+            return None
         logger.error(f"Ошибка редактирования сообщения: {e}")
         return await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
     except Exception as e:
@@ -241,7 +243,7 @@ async def finalize_mass_processing(message: Message, state: FSMContext):
 async def show_user_links(message: Message, state: FSMContext):
     await safe_delete(message)
     logger.info(f"Запрос списка ссылок для user_id={message.from_user.id}")
-    links = await get_links_by_user(message.from_user.id)
+    links = get_links_by_user(message.from_user.id)  # Убрано await
     if not links:
         await message.answer("У вас пока нет сохранённых ссылок.\n\n<b>Что дальше?</b>", reply_markup=get_main_inline_keyboard(), parse_mode="HTML")
         return
@@ -259,11 +261,10 @@ async def send_links_page(message: Message, links, page):
     keyboard = []
     for link in current_links:
         link_id, title, short_url, created_at = link
-        # Форматируем created_at безопасно
         created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
         keyboard.append([InlineKeyboardButton(text=f"📍 {title}", callback_data=f"link_{link_id}")])
     if total_pages > 1:
-        keyboard.append(get_pagination_keyboard(page, total_pages)[0])  # Добавляем пагинацию
+        keyboard.append(get_pagination_keyboard(page, total_pages)[0])
 
     text = "<b>📎 Ваши ссылки:</b>"
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
@@ -277,11 +278,7 @@ async def show_link_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
         return
     _, _, long_url, short_url, title, vk_key, created_at = link
-
-    # Форматируем created_at безопасно
     created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
-
-    # Получаем статистику асинхронно
     stats = await get_link_stats(vk_key, VK_TOKEN)
     views = stats.get("views", 0)
 
@@ -304,7 +301,6 @@ async def show_stats(callback: CallbackQuery):
         await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
         return
     _, _, _, short_url, _, vk_key, _ = link
-
     stats = await get_link_stats(vk_key, VK_TOKEN)
     text = f"Статистика по {short_url}\n" + format_link_stats(stats, short_url)
     keyboard = get_stats_keyboard()
@@ -314,7 +310,7 @@ async def show_stats(callback: CallbackQuery):
 async def back_from_stats(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     page = data.get("page", 1)
-    links = await get_links_by_user(callback.from_user.id)
+    links = get_links_by_user(callback.from_user.id)  # Убрано await
     await state.update_data(links=links, page=page)
     await send_links_page(callback.message, links, page)
 
@@ -341,7 +337,6 @@ async def set_new_title(message: Message, state: FSMContext):
         link = await get_link_by_id(link_id, user_id)
         if link:
             _, _, long_url, short_url, _, vk_key, created_at = link
-            # Форматируем created_at безопасно
             created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
             stats = await get_link_stats(vk_key, VK_TOKEN)
             views = stats.get("views", 0)
@@ -389,7 +384,6 @@ async def confirm_delete(callback: CallbackQuery):
             await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
             return
         _, _, long_url, short_url, title, vk_key, created_at = link
-        # Форматируем created_at безопасно
         created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
         stats = await get_link_stats(vk_key, VK_TOKEN)
         views = stats.get("views", 0)
@@ -408,7 +402,6 @@ async def confirm_delete(callback: CallbackQuery):
             await callback.answer("Ошибка: ссылка не найдена", show_alert=True)
             return
         _, _, long_url, short_url, title, vk_key, created_at = link
-        # Форматируем created_at безопасно
         created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
         stats = await get_link_stats(vk_key, VK_TOKEN)
         views = stats.get("views", 0)
@@ -420,7 +413,5 @@ async def confirm_delete(callback: CallbackQuery):
         )
         await callback.message.edit_text(text, reply_markup=get_delete_confirm_keyboard(link_id, title, short_url), parse_mode="HTML")
 
-def setup_handlers(dp):
-    dp.include_router(router)
 def setup_handlers(dp):
     dp.include_router(router)
