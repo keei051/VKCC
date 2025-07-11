@@ -25,10 +25,11 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     original_url TEXT,
-                    short_url TEXT UNIQUE,
+                    short_url TEXT,
                     title TEXT,
                     vk_key TEXT,
-                    created_at TEXT
+                    created_at TEXT,
+                    UNIQUE(user_id, original_url)
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)")
@@ -38,7 +39,7 @@ def init_db():
         logger.error(f"Ошибка инициализации базы данных: {e}")
 
 
-def is_duplicate_link(user_id: int, original_url: str) -> bool:
+def check_duplicate_link(user_id: int, original_url: str) -> bool:
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -65,8 +66,8 @@ def save_link(user_id: int, original_url: str, short_url: str, title: str, vk_ke
             )
             conn.commit()
             return True
-    except sqlite3.IntegrityError:
-        logger.warning(f"Попытка добавить дубликат short_url: {short_url}")
+    except sqlite3.IntegrityError as e:
+        logger.warning(f"Попытка сохранить дубликат ссылки: {original_url} для user_id={user_id} — {e}")
         return False
     except Exception as e:
         logger.error(f"Ошибка при сохранении ссылки: {e}")
@@ -92,7 +93,11 @@ def get_link_by_id(link_id: int, user_id: int) -> Optional[Tuple]:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at FROM links WHERE id = ? AND user_id = ?",
+                """
+                SELECT id, user_id, original_url, short_url, title, vk_key, created_at
+                FROM links
+                WHERE id = ? AND user_id = ?
+                """,
                 (link_id, user_id)
             )
             return cursor.fetchone()
