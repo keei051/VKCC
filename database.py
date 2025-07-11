@@ -10,7 +10,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "links.db")
 
 def get_db_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 async def init_db():
     conn = get_db_connection()
@@ -18,29 +20,39 @@ async def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            short_url TEXT,
-            long_url TEXT,
-            title TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            user_id INTEGER NOT NULL,
+            long_url TEXT NOT NULL,
+            short_url TEXT NOT NULL,
+            title TEXT DEFAULT 'Без названия',
+            vk_key TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, long_url)
         )
     """)
     conn.commit()
     conn.close()
-    logger.info(f"База данных {DB_PATH} инициализирована или проверена. Файл существует: {os.path.exists(DB_PATH)}")
+    logger.info(f"✅ БД инициализирована: {DB_PATH}")
 
-def save_link(user_id: int, short_url: str, long_url: str, title: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO links (user_id, short_url, long_url, title)
-        VALUES (?, ?, ?, ?)
-    """, (user_id, short_url, long_url, title))
-    conn.commit()
-    conn.close()
-    logger.info(f"Ссылка {short_url} сохранена для user_id {user_id}")
+async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_key: str) -> bool:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO links (user_id, long_url, short_url, title, vk_key)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, long_url, short_url, title, vk_key))
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ Ссылка сохранена: {short_url} ({title}) для user_id={user_id}")
+        return True
+    except sqlite3.IntegrityError:
+        logger.warning(f"⚠️ Попытка сохранить дубликат: {long_url} для user_id={user_id}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Ошибка при сохранении ссылки: {e}")
+        return False
 
-def get_links_by_user(user_id: int):
+async def get_links_by_user(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -49,35 +61,46 @@ def get_links_by_user(user_id: int):
         WHERE user_id = ?
         ORDER BY created_at DESC
     """, (user_id,))
-    result = cursor.fetchall()
+    results = cursor.fetchall()
     conn.close()
-    logger.info(f"Найдено {len(result)} ссылок для user_id {user_id}")
-    return result
+    return [tuple(row) for row in results]
 
-def get_link_by_id(link_id: int):
+async def get_link_by_id(link_id: int, user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, user_id, short_url, long_url, title, created_at
+        SELECT id, user_id, long_url, short_url, title, vk_key, created_at
         FROM links
-        WHERE id = ?
-    """, (link_id,))
+        WHERE id = ? AND user_id = ?
+    """, (link_id, user_id))
     result = cursor.fetchone()
     conn.close()
-    return result
+    return tuple(result) if result else None
 
-def delete_link(link_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM links WHERE id = ?", (link_id,))
-    conn.commit()
-    conn.close()
-    logger.info(f"Ссылка с id={link_id} удалена")
+async def delete_link(link_id: int, user_id: int) -> bool:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM links WHERE id = ? AND user_id = ?", (link_id, user_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"🗑 Ссылка с id={link_id} удалена для user_id={user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка при удалении ссылки: {e}")
+        return False
 
-def rename_link(link_id: int, new_title: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE links SET title = ? WHERE id = ?", (new_title, link_id))
-    conn.commit()
-    conn.close()
-    logger.info(f"Ссылка с id={link_id} переименована в {new_title}")
+async def rename_link(link_id: int, user_id: int, new_title: str) -> bool:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE links SET title = ? WHERE id = ? AND user_id = ?
+        """, (new_title, link_id, user_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"✏️ Ссылка id={link_id} переименована в '{new_title}' для user_id={user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка при переименовании ссылки: {e}")
+        return False
