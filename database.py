@@ -5,7 +5,6 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Абсолютный путь к файлу базы данных
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "links.db")
 
@@ -50,6 +49,20 @@ async def save_link(user_id: int, long_url: str, short_url: str, title: str, vk_
         return False
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении ссылки: {e}")
+        return False
+
+async def check_duplicate_link(user_id: int, long_url: str) -> bool:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id FROM links WHERE user_id = ? AND long_url = ?
+        """, (user_id, long_url))
+        result = cursor.fetchone()
+        conn.close()
+        return result is not None
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки дубликата: {e}")
         return False
 
 async def get_links_by_user(user_id: int):
