@@ -1,4 +1,3 @@
-# utils.py — утилиты
 import re
 import logging
 from aiogram.types import Message
@@ -27,51 +26,52 @@ def is_valid_url(url: str) -> bool:
 
 def format_link_stats(stats: dict, short_url: str) -> str:
     if not stats or stats.get("views", 0) == 0:
-        return f"Статистика по {short_url} отсутствует. Ожидайте переходы."
+        return f"📉 Статистика по <b>{short_url}</b> отсутствует. Ожидайте переходы."
 
-    response = f"Статистика по {short_url}\n"
-    response += f"Переходов: {stats.get('views', 0)}\n\n"
+    total_views = stats.get("views", 1)
+    response = [f"<b>📊 Статистика по {short_url}</b>",
+                f"<b>Всего переходов:</b> {total_views}\n"]
 
+    # Пол и возраст
     if "sex_age" in stats:
-        sex_age = {}
-        for item in stats["sex_age"]:
-            age_range = item.get("age_range", "?")
-            sex_value = item.get("sex")
-            sex = "Мужчины" if sex_value == 1 else "Женщины"
-            views = item.get("views", 0)
-            sex_age.setdefault(age_range, {}).setdefault(sex, 0)
-            sex_age[age_range][sex] += views
-        response += "Пол и возраст:\n"
-        for age, sexes in sex_age.items():
-            men = sexes.get("Мужчины", 0)
-            women = sexes.get("Женщины", 0)
-            total = men + women
-            if total > 0:
-                response += f"- {age}: Мужчины {men/total*100:.0f}%, Женщины {women/total*100:.0f}%\n"
+        response.append("<b>👥 Топ-3 возрастные группы:</b>")
+        sex_map = {1: "мужчины", 2: "женщины"}
+        top_groups = sorted(stats["sex_age"], key=lambda x: x.get("views", 0), reverse=True)[:3]
+        for group in top_groups:
+            age = group.get("age_range", "?")
+            sex = sex_map.get(group.get("sex"), "неизвестно")
+            views = group.get("views", 0)
+            percent = views / total_views * 100 if total_views else 0
+            response.append(f"– {sex}, {age}: {views} ({percent:.1f}%)")
 
+    # Страны
     if "countries" in stats:
-        response += "\nГеография переходов:\n"
-        total_views = stats.get("views", 1)
         country_map = {
             1: "Россия", 2: "Украина", 3: "Беларусь", 4: "Казахстан", 5: "Германия",
             7: "Финляндия", 10: "США", 13: "Франция", 14: "Италия", 17: "Испания"
         }
-        for country in stats["countries"]:
-            country_id = country.get("country_id")
-            views = country.get("views", 0)
-            country_name = country_map.get(country_id, f"Неизвестная страна (ID {country_id})")
-            response += f"- {country_name}: {views} ({views/total_views*100:.1f}%)\n"
+        top_countries = sorted(stats["countries"], key=lambda x: x["views"], reverse=True)[:3]
+        response.append("\n<b>🌍 Страны:</b>")
+        for c in top_countries:
+            cid = c.get("country_id")
+            views = c.get("views", 0)
+            name = country_map.get(cid, f"ID {cid}")
+            percent = views / total_views * 100 if total_views else 0
+            response.append(f"– {name}: {views} ({percent:.1f}%)")
 
+    # Города
     if "cities" in stats:
-        response += "Города:\n"
         city_map = {
             1: "Москва", 2: "Санкт-Петербург", 99: "Уфа", 56: "Казань",
             3: "Новосибирск", 4: "Екатеринбург", 66: "Нижний Новгород"
         }
-        for city in stats["cities"]:
-            city_id = city.get("city_id")
-            views = city.get("views", 0)
-            city_name = city_map.get(city_id, f"Неизвестный город (ID {city_id})")
-            response += f"  - {city_name}: {views} ({views/total_views*100:.1f}%)\n"
+        top_cities = sorted(stats["cities"], key=lambda x: x["views"], reverse=True)[:3]
+        response.append("\n<b>🏙️ Города:</b>")
+        for c in top_cities:
+            cid = c.get("city_id")
+            views = c.get("views", 0)
+            name = city_map.get(cid, f"ID {cid}")
+            percent = views / total_views * 100 if total_views else 0
+            response.append(f"– {name}: {views} ({percent:.1f}%)")
 
-    return response
+    return "\n".join(response)
