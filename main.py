@@ -1,40 +1,36 @@
 import asyncio
 import logging
+import gettext
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.strategy import FSMStrategy
 
 from config import BOT_TOKEN
-from handlers import setup_handlers
-from database import init_db  # ✅ Синхронная функция — без await
+from routers.handlers import router as handlers_router
+from database import init_db
 from session import create_session, close_session
+from middleware.throttle import ThrottlingMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# i18n setup
+gettext.install('bot', localedir='locale')
+
 async def main():
-    # Инициализация VK-сессии
     await create_session()
-
-    # Создание бота и диспетчера
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
-
-    # Удаляем старые вебхуки и дропаем подвисшие апдейты
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2))
     await bot.delete_webhook(drop_pending_updates=True)
-
-    # Инициализация базы данных
-    init_db()  # 🟢 без await
-
-    # Подключаем все хендлеры
-    setup_handlers(dp)
-
-    logger.info("Бот запущен и готов принимать команды.")
-
+    dp = Dispatcher(fsm_strategy=FSMStrategy.USER_IN_CHAT)
+    await init_db()
+    dp.include_router(handlers_router)
+    dp.message.middleware(ThrottlingMiddleware())
+    logger.info("Бот запущен!")
     try:
         await dp.start_polling(bot)
     except Exception as e:
-        logger.exception(f"Ошибка во время работы бота: {e}")
+        logger.error(f"Ошибка при запуске: {e}")
     finally:
         await close_session()
         logger.info("HTTP-сессия закрыта. Бот завершил работу.")
