@@ -51,8 +51,7 @@ def is_duplicate_link(user_id: int, original_url: str) -> bool:
         logger.error(f"Ошибка при проверке дубликата: {e}")
         return False
 
-# Alias for handlers
-check_duplicate_link = is_duplicate_link
+check_duplicate_link = is_duplicate_link  # alias для совместимости
 
 
 def get_link_by_original_url(user_id: int, original_url: str) -> Optional[Tuple]:
@@ -60,8 +59,8 @@ def get_link_by_original_url(user_id: int, original_url: str) -> Optional[Tuple]
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at"
-                " FROM links WHERE user_id = ? AND original_url = ?",
+                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at "
+                "FROM links WHERE user_id = ? AND original_url = ?",
                 (user_id, original_url)
             )
             return cursor.fetchone()
@@ -110,8 +109,8 @@ def get_link_by_id(link_id: int, user_id: int) -> Optional[Tuple]:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at"
-                " FROM links WHERE id = ? AND user_id = ?",
+                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at "
+                "FROM links WHERE id = ? AND user_id = ?",
                 (link_id, user_id)
             )
             return cursor.fetchone()
