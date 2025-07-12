@@ -25,11 +25,10 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     original_url TEXT,
-                    short_url TEXT,
+                    short_url TEXT UNIQUE,
                     title TEXT,
                     vk_key TEXT,
-                    created_at TEXT,
-                    UNIQUE(user_id, original_url)
+                    created_at TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON links (user_id)")
@@ -39,7 +38,7 @@ def init_db():
         logger.error(f"Ошибка инициализации базы данных: {e}")
 
 
-def check_duplicate_link(user_id: int, original_url: str) -> bool:
+def is_duplicate_link(user_id: int, original_url: str) -> bool:
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -51,6 +50,24 @@ def check_duplicate_link(user_id: int, original_url: str) -> bool:
     except Exception as e:
         logger.error(f"Ошибка при проверке дубликата: {e}")
         return False
+
+# Alias for handlers
+check_duplicate_link = is_duplicate_link
+
+
+def get_link_by_original_url(user_id: int, original_url: str) -> Optional[Tuple]:
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at"
+                " FROM links WHERE user_id = ? AND original_url = ?",
+                (user_id, original_url)
+            )
+            return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка при получении ссылки по исходному URL: {e}")
+        return None
 
 
 def save_link(user_id: int, original_url: str, short_url: str, title: str, vk_key: str) -> bool:
@@ -66,8 +83,8 @@ def save_link(user_id: int, original_url: str, short_url: str, title: str, vk_ke
             )
             conn.commit()
             return True
-    except sqlite3.IntegrityError as e:
-        logger.warning(f"Попытка сохранить дубликат ссылки: {original_url} для user_id={user_id} — {e}")
+    except sqlite3.IntegrityError:
+        logger.warning(f"Попытка добавить дубликат short_url: {short_url}")
         return False
     except Exception as e:
         logger.error(f"Ошибка при сохранении ссылки: {e}")
@@ -93,11 +110,8 @@ def get_link_by_id(link_id: int, user_id: int) -> Optional[Tuple]:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
-                SELECT id, user_id, original_url, short_url, title, vk_key, created_at
-                FROM links
-                WHERE id = ? AND user_id = ?
-                """,
+                "SELECT id, user_id, original_url, short_url, title, vk_key, created_at"
+                " FROM links WHERE id = ? AND user_id = ?",
                 (link_id, user_id)
             )
             return cursor.fetchone()
