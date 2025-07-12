@@ -22,7 +22,7 @@ async def show_stats(callback: CallbackQuery):
         return
 
     user_id = callback.from_user.id
-    link = get_link_by_id(link_id, user_id)
+    link = await get_link_by_id(link_id, user_id)
     if not link:
         await callback.answer("Ссылка не найдена.", show_alert=True)
         return
@@ -50,7 +50,7 @@ async def delete_link_handler(callback: CallbackQuery):
         return
 
     user_id = callback.from_user.id
-    deleted = delete_link(link_id, user_id)
+    deleted = await delete_link(link_id, user_id)
     if deleted:
         await callback.message.edit_text("🗑 Ссылка удалена.")
     else:
@@ -83,8 +83,8 @@ async def process_rename(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    if rename_link(link_id, user_id, new_title):
-        link = get_link_by_id(link_id, user_id)
+    if await rename_link(link_id, user_id, new_title):
+        link = await get_link_by_id(link_id, user_id)
         if link:
             _, _, original_url, short_url, _, _, created_at = link
             created_str = created_at[:10] if isinstance(created_at, str) else created_at.strftime("%Y-%m-%d")
