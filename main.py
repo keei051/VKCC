@@ -6,31 +6,35 @@ from aiogram.enums import ParseMode
 
 from config import BOT_TOKEN
 from handlers import setup_handlers
-from database import init_db
-from session import create_session, close_session  # ✅ глобальная HTTP-сессия
+from database import init_db  # ✅ Синхронная функция — без await
+from session import create_session, close_session
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def main():
-    # Инициализация HTTP-сессии для VK API
+    # Инициализация VK-сессии
     await create_session()
 
-    # Создание Telegram-бота
+    # Создание бота и диспетчера
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
+
+    # Удаляем старые вебхуки и дропаем подвисшие апдейты
     await bot.delete_webhook(drop_pending_updates=True)
 
-    # Инициализация диспетчера и хендлеров
-    dp = Dispatcher()
-    init_db()  # ⬅️ исправлено: функция синхронная
+    # Инициализация базы данных
+    init_db()  # 🟢 без await
+
+    # Подключаем все хендлеры
     setup_handlers(dp)
 
-    logger.info("Бот запущен!")
+    logger.info("Бот запущен и готов принимать команды.")
 
     try:
         await dp.start_polling(bot)
     except Exception as e:
-        logger.exception(f"Ошибка при запуске: {e}")
+        logger.exception(f"Ошибка во время работы бота: {e}")
     finally:
         await close_session()
         logger.info("HTTP-сессия закрыта. Бот завершил работу.")
